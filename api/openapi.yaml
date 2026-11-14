@@ -1,0 +1,520 @@
+openapi: 3.0.3
+info:
+  title: goim-business API
+  version: 1.0.0
+  description: |
+    goim-business 账号域（M1）的最小 OpenAPI 契约，只描述当前已注册的 7 个接口。
+
+    **统一响应约定**：所有接口的 HTTP 状态码恒为 200，业务结果一律由响应体 `code` 判断：
+    `0` 表示成功，非 `0` 为业务错误码，错误提示见 `msg`，`data` 可能为空或携带明细。
+    因此成功与业务错误共用同一个 `200` 响应，客户端不要依赖 HTTP 状态码做分支。
+
+    **鉴权**：需要登录态的接口携带 `Authorization: Bearer <access token>`；
+    `access token` 过期返回 `2004`，其余鉴权失败返回 `1002`。
+
+    **常用错误码**：1001 参数错误、1002 未认证或登录态已失效、1029 请求过于频繁、
+    2001 账号已存在、2002 账号或密码错误、2003 账号已被冻结、2004 access token 已过期、
+    2005 刷新令牌已失效、2006 会话数量超出上限、9001 服务内部错误、9002 依赖服务不可用。
+
+tags:
+  - name: Account
+    description: 账号注册、登录、令牌刷新、登出、会话管理与改密
+
+servers:
+  - url: /api/v1
+
+paths:
+  /account/register:
+    post:
+      tags: [Account]
+      operationId: registerAccount
+      summary: 注册账号
+      description: |
+        注册成功即签发 access token / refresh token 并创建当前会话。
+        公开接口，受 IP 维度限流保护（默认 3 次/小时）。
+        错误码：1001 参数错误、2001 账号已存在、1029 请求过于频繁、9001 服务内部错误、9002 依赖服务不可用。
+      parameters:
+        - $ref: '#/components/parameters/XClientPlatform'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/AuthOK'
+
+  /account/login:
+    post:
+      tags: [Account]
+      operationId: loginAccount
+      summary: 登录
+      description: |
+        校验账号密码，成功后签发 access token / refresh token 并创建新会话。
+        公开接口，受 IP 维度限流保护（默认 5 次/分钟）；登录失败次数超阈值同样返回 1029。
+        错误码：1001 参数错误、2002 账号或密码错误、2003 账号已被冻结、1029 请求过于频繁、
+        9001 服务内部错误、9002 依赖服务不可用。
+      parameters:
+        - $ref: '#/components/parameters/XClientPlatform'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/AuthOK'
+
+  /account/refresh:
+    post:
+      tags: [Account]
+      operationId: refreshToken
+      summary: 刷新令牌
+      description: |
+        使用请求体中的 refreshToken 轮换令牌，请求体即凭证，不需要 Authorization 头。
+        旧 refreshToken 被重放时会撤销整个令牌家族并返回 2005。
+        错误码：1002 未认证或登录态已失效、2003 账号已被冻结、2005 刷新令牌已失效、
+        9001 服务内部错误、9002 依赖服务不可用。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/AuthOK'
+
+  /account/logout:
+    post:
+      tags: [Account]
+      operationId: logoutAccount
+      summary: 登出当前会话
+      description: |
+        撤销当前会话并清除 Redis 活跃标记；响应 data 为空。
+        错误码：1002 未认证或登录态已失效、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          $ref: '#/components/responses/EmptyOK'
+
+  /account/sessions:
+    get:
+      tags: [Account]
+      operationId: listSessions
+      summary: 查询活跃会话
+      description: |
+        列出当前用户全部活跃会话，`current` 标记当前请求所在会话。
+        错误码：1002 未认证或登录态已失效、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          $ref: '#/components/responses/SessionListOK'
+
+  /account/sessions/revoke:
+    post:
+      tags: [Account]
+      operationId: revokeSession
+      summary: 踢出指定会话
+      description: |
+        撤销本人指定的会话；sessionId 非数字返回 1001，会话不存在或不属于本人返回 1004。
+        错误码：1001 参数错误、1002 未认证或登录态已失效、1004 资源不存在、
+        9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevokeSessionRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/EmptyOK'
+
+  /account/password:
+    put:
+      tags: [Account]
+      operationId: changePassword
+      summary: 修改密码
+      description: |
+        校验原密码后更新密码，并撤销除当前会话外的全部会话。
+        原密码错误返回 2002；新密码不满足复杂度返回 1001。
+        错误码：1001 参数错误、1002 未认证或登录态已失效、2002 账号或密码错误、
+        9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/EmptyOK'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "登录/注册/刷新签发的 access token，通过 Authorization: Bearer <token> 传递。"
+
+  parameters:
+    XClientPlatform:
+      name: X-Client-Platform
+      in: header
+      required: false
+      description: |
+        客户端平台。缺省按 Web（平台 ID 5）处理。
+        支持字符串 ios / android / windows / macos / web / harmony，或数字 1 / 2 / 3 / 4 / 5 / 11；
+        非法取值返回 1001。该值只影响新会话记录的 platform 字段。
+      schema:
+        type: string
+        enum: ["ios", "android", "windows", "macos", "web", "harmony", "1", "2", "3", "4", "5", "11"]
+        default: web
+        example: web
+
+  headers:
+    XRequestID:
+      description: 本次请求的追踪 ID；请求未携带 X-Request-ID 时由服务端生成 UUIDv7 并回写。
+      required: false
+      schema:
+        type: string
+        example: "0190f7a2-6d0e-7c1b-8f58-0e8f0d9c1234"
+
+  responses:
+    AuthOK:
+      description: |
+        成功时 data 为 AuthResponse（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/AuthResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    SessionListOK:
+      description: |
+        成功时 data 为 SessionView 数组（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/SessionListResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    EmptyOK:
+      description: |
+        成功时 code=0，data 为 null 或被省略；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/EmptyResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    RegisterRequest:
+      type: object
+      description: 注册请求。
+      required: [loginName, password, deviceId]
+      properties:
+        loginName:
+          type: string
+          description: 登录名；服务端归一化为小写，仅允许 3-64 位字母、数字、下划线。
+          minLength: 3
+          maxLength: 64
+          example: alice
+        password:
+          type: string
+          description: 明文密码；8-64 字节且同时包含字母与数字。
+          minLength: 8
+          maxLength: 64
+          example: Passw0rd!
+        nickname:
+          type: string
+          description: 昵称；最长 64 个字符，为空时回退为登录名。
+          maxLength: 64
+          example: Alice
+        deviceId:
+          type: string
+          description: 设备标识，非空。
+          maxLength: 64
+          example: web-device-001
+      example:
+        loginName: alice
+        password: Passw0rd!
+        nickname: Alice
+        deviceId: web-device-001
+
+    LoginRequest:
+      type: object
+      description: 登录请求。
+      required: [loginName, password, deviceId]
+      properties:
+        loginName:
+          type: string
+          description: 登录名；服务端会去空格并转小写。
+          maxLength: 64
+          example: alice
+        password:
+          type: string
+          description: 明文密码。
+          maxLength: 64
+          example: Passw0rd!
+        deviceId:
+          type: string
+          description: 设备标识，非空。
+          maxLength: 64
+          example: web-device-001
+      example:
+        loginName: alice
+        password: Passw0rd!
+        deviceId: web-device-001
+
+    RefreshRequest:
+      type: object
+      description: 刷新令牌请求；空 refreshToken 返回 1002。
+      properties:
+        refreshToken:
+          type: string
+          description: 登录/注册/上次刷新返回的 refreshToken。
+          example: "rt_7d3c9f1a2b4e6d8f"
+      example:
+        refreshToken: "rt_7d3c9f1a2b4e6d8f"
+
+    RevokeSessionRequest:
+      type: object
+      description: 撤销指定会话请求。
+      required: [sessionId]
+      properties:
+        sessionId:
+          type: string
+          description: 会话 ID（十进制数字字符串）；非数字返回 1001。
+          example: "123456789"
+      example:
+        sessionId: "123456789"
+
+    ChangePasswordRequest:
+      type: object
+      description: 修改密码请求。
+      required: [oldPassword, newPassword]
+      properties:
+        oldPassword:
+          type: string
+          description: 原密码。
+          maxLength: 64
+          example: Passw0rd!
+        newPassword:
+          type: string
+          description: 新密码；8-64 字节且同时包含字母与数字。
+          minLength: 8
+          maxLength: 64
+          example: NewPassw0rd!
+      example:
+        oldPassword: Passw0rd!
+        newPassword: NewPassw0rd!
+
+    AuthResponse:
+      type: object
+      description: 注册/登录/刷新成功后的 data。
+      required: [user, token, refreshExpiresIn, sessionId, platform]
+      properties:
+        user:
+          $ref: '#/components/schemas/UserView'
+        token:
+          $ref: '#/components/schemas/TokenView'
+        refreshToken:
+          type: string
+          description: 刷新令牌；authResp 始终写入，DTO 中带 omitempty。
+          example: "rt_7d3c9f1a2b4e6d8f"
+        refreshExpiresIn:
+          type: integer
+          format: int64
+          description: refresh token 有效期（秒）。
+          example: 2592000
+        sessionId:
+          type: string
+          description: 新创建的会话 ID（十进制数字字符串）。
+          example: "123456789"
+        platform:
+          type: integer
+          format: int32
+          description: 平台 ID：iOS=1、Android=2、Windows=3、macOS=4、Web=5、HarmonyOS=11。
+          enum: [1, 2, 3, 4, 5, 11]
+          example: 5
+
+    UserView:
+      type: object
+      description: 账号基础信息。
+      required: [userId, loginName, nickname]
+      properties:
+        userId:
+          type: string
+          description: 用户 ID（十进制数字字符串），与 IM userID 一致。
+          example: "123456789"
+        loginName:
+          type: string
+          example: alice
+        nickname:
+          type: string
+          example: Alice
+
+    TokenView:
+      type: object
+      description: 本次签发的访问令牌。
+      required: [accessToken, expiresIn]
+      properties:
+        accessToken:
+          type: string
+          description: "access JWT，用于 Authorization: Bearer <token>。"
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example.payload.signature"
+        expiresIn:
+          type: integer
+          format: int64
+          description: access token 有效期（秒）。
+          example: 900
+
+    SessionView:
+      type: object
+      description: 对外暴露的会话信息，不含任何令牌。
+      required: [sessionId, platform, deviceId, userAgent, ip, createdAt, lastSeenAt, expiresAt, current]
+      properties:
+        sessionId:
+          type: string
+          description: 会话 ID（十进制数字字符串）。
+          example: "123456789"
+        platform:
+          type: integer
+          format: int32
+          description: 平台 ID：iOS=1、Android=2、Windows=3、macOS=4、Web=5、HarmonyOS=11。
+          enum: [1, 2, 3, 4, 5, 11]
+          example: 5
+        deviceId:
+          type: string
+          example: web-device-001
+        userAgent:
+          type: string
+          example: Mozilla/5.0 (Windows NT 10.0; Win64; x64)
+        ip:
+          type: string
+          example: "1.2.3.4"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-11-14T10:00:00+08:00"
+        lastSeenAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 最后活跃时间；当前实现不更新该字段，通常为 null。
+          example: null
+        expiresAt:
+          type: string
+          format: date-time
+          example: "2026-12-14T10:00:00+08:00"
+        current:
+          type: boolean
+          description: 是否为当前请求所在的会话。
+          example: true
+
+    SessionViewList:
+      type: array
+      description: 活跃会话列表。
+      items:
+        $ref: '#/components/schemas/SessionView'
+
+    AuthResult:
+      type: object
+      description: 注册/登录/刷新的成功响应体。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/AuthResponse'
+
+    SessionListResult:
+      type: object
+      description: 会话列表的成功响应体。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/SessionViewList'
+
+    EmptyResult:
+      type: object
+      description: 无业务数据的成功响应体。
+      required: [code, msg]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          type: object
+          nullable: true
+          description: 成功时为 null 或被省略。
+
+    ErrorResponse:
+      type: object
+      description: |
+        统一业务错误响应体（HTTP 状态仍为 200）。
+        code 取自 errcode：1001 参数错误、1002 未认证、1004 资源不存在、1029 限流、
+        2001-2006 账号域错误、9001 内部错误、9002 依赖服务不可用。
+      required: [code, msg]
+      properties:
+        code:
+          type: integer
+          format: int32
+          description: 业务错误码，非 0。
+          example: 1001
+        msg:
+          type: string
+          description: 面向用户的错误提示。
+          example: 参数错误
+        data:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: 错误明细；参数校验失败时为字段与校验规则的映射，其余多为 null 或被省略。
+          example: null
+      example:
+        code: 1001
+        msg: 参数错误
+        data:
+          Password: min
