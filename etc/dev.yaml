@@ -1,0 +1,14 @@
+env: dev
+
+log:
+  level: debug
+
+mysql:
+  dsn: "root:devpass@tcp(127.0.0.1:3306)/goim_business?charset=utf8mb4&parseTime=True&loc=UTC"
+
+auth:
+  jwt_secret: "dev-only-jwt-secret-change-before-deploy"
+
+cors:
+  allowed_origins:
+    - "http://localhost:5173"

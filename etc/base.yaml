@@ -1,0 +1,50 @@
+server:
+  http_addr: "0.0.0.0:8080"
+  probe_addr: "0.0.0.0:8081"
+  metrics_addr: "0.0.0.0:9091"
+  read_timeout: 15s
+  write_timeout: 30s
+  idle_timeout: 60s
+  shutdown_timeout: 15s
+  max_body_bytes: 8388608
+  # 反向代理的可信网段（IP 或 CIDR）。为空表示服务直连，忽略 X-Forwarded-For / X-Real-IP。
+  # 部署在 Nginx/SLB 之后时至少加入代理地址，例如 127.0.0.1、10.0.0.0/8。
+  trusted_proxies: []
+
+log:
+  level: info
+  format: json
+  service: goim-business
+
+mysql:
+  dsn: ""
+  max_open_conns: 50
+  max_idle_conns: 10
+  conn_max_lifetime: 30m
+  conn_max_idle_time: 5m
+  slow_threshold: 200ms
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+  key_prefix: "goim:business"
+
+auth:
+  jwt_secret: ""
+  issuer: "goim-business"
+  audience: "goim-business-api"
+  access_ttl: 15m
+  refresh_ttl: 720h
+  max_sessions_per_user: 5
+  max_sessions_per_platform: 3
+  login_lock_threshold: 10
+  login_lock_window: 15m
+
+ratelimit:
+  enabled: true
+  login_per_minute: 5
+  register_per_hour: 3
+
+cors:
+  allowed_origins: ["*"]

@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+      - name: 下载依赖
+        run: go mod download
+      - name: 编译
+        run: go build ./...
+      - name: 静态检查
+        run: go vet ./...
+      - name: 单元测试
+        run: go test -race ./...

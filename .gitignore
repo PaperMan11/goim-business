@@ -1,0 +1,37 @@
+# 本地环境与密钥（示例文件需要入库）
+.env
+.env.*
+!.env.example
+etc/local.yaml
+etc/*.local.yaml
+
+# 构建产物
+/bin/
+/dist/
+/tmp/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+*.cover
+
+# 测试与覆盖率
+coverage.out
+coverage.html
+coverage.txt
+
+# 日志与临时文件
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+
+# IDE / 操作系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
