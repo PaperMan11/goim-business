@@ -1,12 +1,27 @@
 APP := goim-business
+BIN_DIR := bin
+VERSION ?= dev
 
-.PHONY: tidy build test vet run migrate-up migrate-down compose-up compose-down
+# Windows 下可执行文件需要 .exe 后缀。
+EXE :=
+ifdef OS
+  ifneq ($(filter Windows%,$(OS)),)
+    EXE := .exe
+  endif
+endif
+
+.PHONY: tidy build build-api build-migrate test vet run migrate-up migrate-down compose-up compose-down image
 
 tidy:
 	go mod tidy
 
-build:
-	go build ./...
+build: build-api build-migrate
+
+build-api:
+	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o $(BIN_DIR)/api$(EXE) ./cmd/api
+
+build-migrate:
+	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o $(BIN_DIR)/migrate$(EXE) ./cmd/migrate
 
 test:
 	go test ./...
