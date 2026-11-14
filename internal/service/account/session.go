@@ -3,6 +3,7 @@ package account
 import (
 	"context"
 	"errors"
+	"sort"
 	"strconv"
 
 	domain "goim-business/internal/domain/account"
@@ -47,9 +48,9 @@ func (s *Service) Sessions(ctx context.Context, userID, currentSID int64) ([]typ
 			Current:    item.ID == currentSID,
 		})
 	}
-	// sort.Slice(views, func(i, j int) bool {
-	// 	return views[i].CreatedAt.After(views[j].CreatedAt)
-	// })
+	sort.Slice(views, func(i, j int) bool {
+		return views[i].CreatedAt.After(views[j].CreatedAt)
+	})
 	return views, nil
 }
 
