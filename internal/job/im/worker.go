@@ -16,7 +16,7 @@ import (
 const (
 	// maxBackoff 是补偿任务重试退避的上限。
 	maxBackoff = time.Hour
-	// errorLimit 与 account_im_outbox.last_error 的列长度保持一致。
+	// errorLimit 与 outbox_events.last_error 的列长度保持一致。
 	errorLimit = 512
 	// defaultBatchSize 是未配置批量大小时的兜底值。
 	defaultBatchSize = 20

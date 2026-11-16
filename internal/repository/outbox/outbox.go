@@ -1,4 +1,5 @@
-package account
+// Package outbox 实现通用 outbox 任务表（outbox_events）的持久化。
+package outbox
 
 import (
 	"context"
@@ -13,7 +14,7 @@ import (
 	"goim-business/internal/service/ports"
 )
 
-func outboxFromRecord(record *model.IMOutbox) ports.OutboxEntry {
+func fromRecord(record *model.Outbox) ports.OutboxEntry {
 	return ports.OutboxEntry{
 		ID:          record.ID,
 		UserID:      record.UserID,
@@ -26,24 +27,24 @@ func outboxFromRecord(record *model.IMOutbox) ports.OutboxEntry {
 	}
 }
 
-// OutboxRepo 是 account_im_outbox 表的仓储实现。
-type OutboxRepo struct {
+// Repo 是 outbox_events 表的仓储实现。
+type Repo struct {
 	db *gorm.DB
 }
 
-// NewOutboxRepo 构造 outbox 仓储。
-func NewOutboxRepo(db *gorm.DB) *OutboxRepo {
-	return &OutboxRepo{db: db}
+// New 构造 outbox 仓储。
+func New(db *gorm.DB) *Repo {
+	return &Repo{db: db}
 }
 
-func (r *OutboxRepo) dbFrom(ctx context.Context) *gorm.DB {
+func (r *Repo) dbFrom(ctx context.Context) *gorm.DB {
 	return repository.DBFromContext(ctx, r.db)
 }
 
-// Enqueue 写入一条待处理任务；复用上下文中的事务，保证与账号数据同事务提交。
-func (r *OutboxRepo) Enqueue(ctx context.Context, userID int64, action, payload string) error {
+// Enqueue 写入一条待处理任务；复用上下文中的事务，保证与业务数据同事务提交。
+func (r *Repo) Enqueue(ctx context.Context, userID int64, action, payload string) error {
 	now := timex.Now()
-	return r.dbFrom(ctx).Create(&model.IMOutbox{
+	return r.dbFrom(ctx).Create(&model.Outbox{
 		UserID:      userID,
 		Action:      action,
 		Payload:     payload,
@@ -56,8 +57,8 @@ func (r *OutboxRepo) Enqueue(ctx context.Context, userID int64, action, payload 
 }
 
 // FindPending 返回指定用户与动作最近一条未完成任务；不存在时返回 (nil, nil)。
-func (r *OutboxRepo) FindPending(ctx context.Context, userID int64, action string) (*ports.OutboxEntry, error) {
-	var record model.IMOutbox
+func (r *Repo) FindPending(ctx context.Context, userID int64, action string) (*ports.OutboxEntry, error) {
+	var record model.Outbox
 	err := r.dbFrom(ctx).
 		Where("user_id = ? AND action = ? AND status IN ?",
 			userID, action, []int8{ports.OutboxStatusPending, ports.OutboxStatusFailed}).
@@ -69,16 +70,16 @@ func (r *OutboxRepo) FindPending(ctx context.Context, userID int64, action strin
 		}
 		return nil, err
 	}
-	entry := outboxFromRecord(&record)
+	entry := fromRecord(&record)
 	return &entry, nil
 }
 
 // ListDue 取出已到期的待处理/失败任务，按到期时间升序。
-func (r *OutboxRepo) ListDue(ctx context.Context, limit int) ([]ports.OutboxEntry, error) {
+func (r *Repo) ListDue(ctx context.Context, limit int) ([]ports.OutboxEntry, error) {
 	if limit <= 0 {
 		limit = 1
 	}
-	var records []model.IMOutbox
+	var records []model.Outbox
 	err := r.dbFrom(ctx).
 		Where("status IN ?", []int8{ports.OutboxStatusPending, ports.OutboxStatusFailed}).
 		Where("next_retry_at <= ?", timex.Now()).
@@ -90,14 +91,14 @@ func (r *OutboxRepo) ListDue(ctx context.Context, limit int) ([]ports.OutboxEntr
 	}
 	entries := make([]ports.OutboxEntry, 0, len(records))
 	for i := range records {
-		entries = append(entries, outboxFromRecord(&records[i]))
+		entries = append(entries, fromRecord(&records[i]))
 	}
 	return entries, nil
 }
 
 // MarkDone 标记任务已完成。
-func (r *OutboxRepo) MarkDone(ctx context.Context, id int64) error {
-	return r.dbFrom(ctx).Model(&model.IMOutbox{}).
+func (r *Repo) MarkDone(ctx context.Context, id int64) error {
+	return r.dbFrom(ctx).Model(&model.Outbox{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
 			"status":     ports.OutboxStatusDone,
@@ -106,8 +107,8 @@ func (r *OutboxRepo) MarkDone(ctx context.Context, id int64) error {
 }
 
 // MarkRetry 记录一次失败并安排下次重试时间。
-func (r *OutboxRepo) MarkRetry(ctx context.Context, id int64, attempts int, lastError string, nextRetryAt time.Time) error {
-	return r.dbFrom(ctx).Model(&model.IMOutbox{}).
+func (r *Repo) MarkRetry(ctx context.Context, id int64, attempts int, lastError string, nextRetryAt time.Time) error {
+	return r.dbFrom(ctx).Model(&model.Outbox{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
 			"status":        ports.OutboxStatusFailed,

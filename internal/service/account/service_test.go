@@ -71,7 +71,6 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 		MaxSessionsPerPlatform: 3,
 		LoginLockThreshold:     10,
 		LoginLockWindow:        15 * time.Minute,
-		IMOutboxBatchSize:      20,
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -79,7 +78,7 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 
 	issuer := token.NewIssuer("test-secret-0123456789", "goim-business", "goim-business-api", cfg.AccessTTL)
 	clock := &testClock{base: time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)}
-	imSync := imjob.NewWorker(users, provisioner, outbox, cfg.IMOutboxBatchSize, clock.Now, zap.NewNop().Sugar())
+	imSync := imjob.NewWorker(users, provisioner, outbox, 20, clock.Now, zap.NewNop().Sugar())
 	svc := NewService(users, creds, sessions, fakeTx{}, cache, cache, provisioner, imTokens, outbox, imSync, issuer, cfg, zap.NewNop().Sugar())
 
 	svc.now = clock.Now

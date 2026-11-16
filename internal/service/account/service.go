@@ -22,8 +22,6 @@ type Config struct {
 	LoginLockWindow        time.Duration
 	IMAPIBaseURL           string
 	IMWSURL                string
-	// IMOutboxBatchSize 是单次扫描 outbox 的最大条数。
-	IMOutboxBatchSize int
 }
 
 // IMProvisioner 是账号域消费的 IM 开通能力；实现位于 internal/job/im，账号域只依赖该接口。

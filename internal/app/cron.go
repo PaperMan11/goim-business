@@ -17,6 +17,7 @@ import (
 	"goim-business/internal/pkg/timex"
 	"goim-business/internal/repository"
 	accountrepo "goim-business/internal/repository/account"
+	outboxrepo "goim-business/internal/repository/outbox"
 )
 
 // cronLockTTL 是 cron 互斥锁的持有时间；所有定时任务的 Timeout 都必须小于该值。
@@ -72,7 +73,7 @@ func NewCronApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*Cron
 		SQLDB:      sqlDB,
 		Redis:      rdb,
 		IM:         im,
-		Worker:     imjob.NewWorker(accountrepo.NewUserRepo(db), imClient{client: im}, accountrepo.NewOutboxRepo(db), cfg.IM.OutboxBatchSize, timex.Now, log.Sugar()),
+		Worker:     imjob.NewWorker(accountrepo.NewUserRepo(db), imClient{client: im}, outboxrepo.New(db), cfg.IM.OutboxBatchSize, timex.Now, log.Sugar()),
 		Locker:     redislock.NewRedisLocker(rdb, lock.WithDefaultTTL(cronLockTTL), lock.WithRetryStrategy(lock.NoRetry())),
 		LockPrefix: fmt.Sprintf("%s:%s:cron", cfg.Redis.KeyPrefix, cfg.Env),
 	}, nil

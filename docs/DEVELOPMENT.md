@@ -118,7 +118,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 
 ### 2.3 业务后端必须补充的“现状未覆盖职责”
 
-1. **IM 账号开通器（User Provisioning）**（✅）：注册后同步 goim user，失败可重试，状态可查询。**业务 userID 即 IM userID**，开通时原样写入，不生成第二套 ID。当前已写入 `account_users.im_status/im_synced_at`；注册事务内同时写 `account_im_outbox`，独立 `cmd/cron` 进程按退避策略补偿（✅）；注销同步仍 ⏳。
+1. **IM 账号开通器（User Provisioning）**（✅）：注册后同步 goim user，失败可重试，状态可查询。**业务 userID 即 IM userID**，开通时原样写入，不生成第二套 ID。当前已写入 `account_users.im_status/im_synced_at`；注册事务内同时写通用 `outbox_events`，独立 `cmd/cron` 进程按退避策略补偿（✅）；注销同步仍 ⏳。
 2. **IM Token Broker**（✅）：admin token 缓存、按 `(userID, platformID)` 复用 user token、IP 限频。
 3. **设备注册表**（⏳）：deviceID、平台、版本、推送 token、最后活跃时间；支撑多端踢出与推送。当前会话表已记录 `device_id`，但没有独立设备表。
 4. **业务文件资产**（⏳）：首版只做头像；后续扩展反馈截图、后台素材的对象 key、配额、审计；与聊天附件分桶/分前缀。
@@ -632,28 +632,30 @@ services:
 - goim 已有 Kafka，但那是消息扇出通道，业务服务接入会引入消费组、offset、运维与重复消费治理，收益不足。
 - Redis Stream/asynq 也可行，但关键链路（账号创建 → IM 开通）需要“与业务事务同生共死”，MySQL outbox 最稳。
 
-通用事件表目标结构（⏳ 未创建；本轮先落地账号域专用表）：
+通用事件表（✅ 已创建，`migrations/000002_outbox_events`，不属于任何业务域）：
 
 ```sql
 CREATE TABLE outbox_events (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  topic         VARCHAR(64)  NOT NULL,
-  aggregate_id  VARCHAR(64)  NOT NULL,
-  payload       JSON         NOT NULL,
-  status        TINYINT      NOT NULL DEFAULT 0, -- 0待处理 1成功 2失败
-  retry_count   INT          NOT NULL DEFAULT 0,
-  next_retry_at DATETIME(3)  NOT NULL,
+  user_id       BIGINT UNSIGNED NOT NULL,
+  action        VARCHAR(32)  NOT NULL,
+  payload       TEXT         NOT NULL DEFAULT (''),
+  status        TINYINT      NOT NULL DEFAULT 0, -- 0待处理 1已完成 2失败待重试
+  attempts      INT          NOT NULL DEFAULT 0,
+  next_retry_at DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  last_error    VARCHAR(512) NOT NULL DEFAULT '',
   created_at    DATETIME(3)  NOT NULL,
   updated_at    DATETIME(3)  NOT NULL,
-  KEY idx_status_retry (status, next_retry_at)
+  KEY idx_status_next_retry (status, next_retry_at),
+  KEY idx_user_action (user_id, action)
 );
 ```
 
-当前已落地的账号域实现：迁移 `migrations/000002_im_outbox` 创建 `account_im_outbox`（`user_id/action/payload/status/attempts/next_retry_at/last_error`）；注册事务内写入 `provision_im`，同步开通成功标记 `status=1`，失败标记 `status=2` 并按 `next_retry_at = now + 2^attempts 分钟` 退避（上限 1 小时，attempts 从 1 起算）。`cmd/cron` 通过 `internal/cron` 的 `Scheduler` 注册任务，底层使用 `robfig/cron/v3`；IM 开通任务的表达式为 `@every im.outbox_scan_interval`（默认 60s），每轮先抢名为 `im_outbox` 的 Redis 锁（TTL 5 分钟，抢不到说明其他实例在跑，直接跳过），再扫描一批（`im.outbox_batch_size`，默认 20）`next_retry_at <= now` 的记录；已 Ready 的用户直接标记完成，不再调用 goim。
+当前已落地的实现：注册事务内写入 `provision_im`，同步开通成功标记 `status=1`，失败标记 `status=2` 并按 `next_retry_at = now + 2^attempts 分钟` 退避（上限 1 小时，attempts 从 1 起算）。`cmd/cron` 通过 `internal/cron` 的 `Scheduler` 注册任务，底层使用 `robfig/cron/v3`；IM 开通任务的表达式为 `@every im.outbox_scan_interval`（默认 60s），每轮先抢名为 `im_outbox` 的 Redis 锁（TTL 5 分钟，抢不到说明其他实例在跑，直接跳过），再扫描一批（`im.outbox_batch_size`，默认 20）`next_retry_at <= now` 的记录；已 Ready 的用户直接标记完成，不再调用 goim。
 
 新增定时任务只需实现 `cron.Job`（`Name` / `Spec` / `Timeout` / `Run`）并在 `cmd/cron` 注册；锁键自动为 `{redis.key_prefix}:{env}:cron:{name}`，不同任务使用不同锁，不会相互阻塞。`Timeout` 必须小于锁 TTL（当前 5 分钟）。
 
-通用 `outbox_events` 仍为规划（⏳）：计划用 `SELECT ... FOR UPDATE SKIP LOCKED` 批量取任务，指数退避（1m/5m/30m/2h/6h，上限 8 次），超过阈值进死信状态并告警。worker 已完全独立：实现位于 `internal/job/im`（`Worker.Provision/Settle/RunDue`），账号域只依赖 `IMProvisioner` 接口；outbox 作为通用投递机制，其端口与类型（`OutboxEntry`、状态常量、`OutboxRepository`）定义在 `internal/service/ports/outbox.go`，domain 只保留用户、凭证、会话三个聚合的仓储。`cmd/cron` 使用 `NewCronApp` 精简装配（不构建 HTTP、令牌、限流组件），并以 Redis 分布式锁保证多实例下同一时刻只有一个补偿任务在运行。
+通用 `outbox_events` 已落地（000002）；后续可扩展 `topic`/`aggregate_id` 字段以承载资料同步等更多 action，并计划用 `SELECT ... FOR UPDATE SKIP LOCKED` 批量取任务、超过阈值进死信状态并告警。worker 已完全独立：实现位于 `internal/job/im`（`Worker.Provision/Settle/RunDue`），账号域只依赖 `IMProvisioner` 接口；outbox 的端口与类型（`OutboxEntry`、状态常量、`OutboxRepository`）定义在 `internal/service/ports/outbox.go`，表模型与实现在 `internal/model/outbox.go`、`internal/repository/outbox`，domain 只保留用户、凭证、会话三个聚合的仓储。`cmd/cron` 使用 `NewCronApp` 精简装配（不构建 HTTP、令牌、限流组件），并以 Redis 分布式锁保证多实例下同一时刻只有一个补偿任务在运行。
 
 升级路径：当出现跨团队消费、峰值 >1000 TPS 或需要多订阅方时，再把 outbox 投递到 Kafka；业务代码只需替换 dispatcher。
 
@@ -735,6 +737,7 @@ goim-business/
 │   │   └── requestid.go            # X-Request-ID / operationID / UUIDv7
 │   ├── job/im/                     # ✅ IM 开通与 outbox 补偿 worker
 │   ├── model/account.go            # gorm 持久化记录（account_* 表）
+│   ├── model/outbox.go             # outbox_events 表模型（通用，不属于业务域）
 │   ├── pkg/                        # 无业务语义基础设施
 │   │   ├── convert/                # 类型转换
 │   │   ├── errcode/                # 错误码注册表
@@ -755,7 +758,8 @@ goim-business/
 │   ├── repository/
 │   │   ├── db.go                   # gorm 连接/连接池/Ping
 │   │   ├── tx.go                   # TxManager + DBFromContext
-│   │   └── account/                # user/credential/session 仓储实现
+│   │   ├── account/                # user/credential/session 仓储实现
+│   │   └── outbox/                 # outbox_events 仓储实现（通用）
 │   ├── service/
 │   │   ├── account/                # 注册/登录/刷新/会话/改密 + 单测
 │   │   └── ports/                  # 基础设施端口：session/login/tx/im/outbox 按用途分文件
@@ -1010,7 +1014,7 @@ CREATE TABLE audit_logs (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 ```
 
-IM 开通补偿使用 `account_im_outbox`（见 §4.14，✅）；通用 `outbox_events` 仍 ⏳。管理员角色未来用 `admin_users(user_id, role, status)` 单表，权限点后续再拆（⏳）。
+IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理员角色未来用 `admin_users(user_id, role, status)` 单表，权限点后续再拆（⏳）。
 
 ---
 
@@ -1207,7 +1211,7 @@ client → POST /api/v1/account/register（X-Client-Platform 可选）
   service:
     2. 校验登录名/密码/昵称/deviceId
     3. argon2id 计算密码哈希
-    4. 事务：INSERT account_users → INSERT account_credentials → INSERT account_im_outbox(provision_im) → 创建会话（签发 access/refresh）
+    4. 事务：INSERT account_users → INSERT account_credentials → INSERT outbox_events(provision_im) → 创建会话（签发 access/refresh）
     5. 会话上限检查（踢出旧会话）
     6. 写 Redis sess:active:{sid}
   response: {code:0,data:{user,token,refreshToken,...,sessionId,platform}}
@@ -1311,7 +1315,7 @@ POST /admin/announcements
 
 - goim 客户端（admin token 缓存、错误归一）；user provisioning（同步开通 + 手动重试）；`/im/token`；`/im/status`；`/im/retry`；平台 ID 约定。
   - goim 客户端底座 + 注册开通 + token 兑换（Redis 缓存、IP 限流、缓存 fail-open）：✅ 已实现。
-  - outbox 补偿 ✅：注册事务内写 `account_im_outbox`，同步结果落定状态；worker 按 2^attempts 分钟退避（上限 1 小时）自动重试，`/im/retry` 仍可手动触发。
+  - outbox 补偿 ✅：注册事务内写通用 `outbox_events`，同步结果落定状态；worker 按 2^attempts 分钟退避（上限 1 小时）自动重试，`/im/retry` 仍可手动触发。
 - 同时改造 `goim-web-chat`：移除 `adminSecret`，改 `loginWithToken` + `TokenProvider`，`VITE_GOIM_PLATFORM_ID=5`。⏳
 - 验收：用业务账号在 Web 登录，能收发消息、拉历史；IM token 过期后自动刷新；前端产物中搜不到 admin secret。⏳（待客户端改造后验收）
 

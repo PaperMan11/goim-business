@@ -22,6 +22,7 @@ import (
 	"goim-business/internal/pkg/token"
 	"goim-business/internal/repository"
 	accountrepo "goim-business/internal/repository/account"
+	outboxrepo "goim-business/internal/repository/outbox"
 	"goim-business/internal/service/account"
 	"goim-business/internal/service/ports"
 )
@@ -43,7 +44,7 @@ type App struct {
 	Users       *accountrepo.UserRepo
 	Credentials *accountrepo.CredentialRepo
 	Sessions    *accountrepo.SessionRepo
-	IMOutbox    *accountrepo.OutboxRepo
+	Outbox      *outboxrepo.Repo
 
 	// 基础设施。
 	SessionCache *cache.SessionCache
@@ -89,7 +90,7 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		Users:        accountrepo.NewUserRepo(db),
 		Credentials:  accountrepo.NewCredentialRepo(db),
 		Sessions:     accountrepo.NewSessionRepo(db),
-		IMOutbox:     accountrepo.NewOutboxRepo(db),
+		Outbox:       outboxrepo.New(db),
 		SessionCache: cache.NewSessionCache(rdb, keyPrefix),
 		IMTokenCache: cache.NewIMTokenCache(rdb, keyPrefix),
 		TokenIssuer: token.NewIssuer(
@@ -126,8 +127,8 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		a.SessionCache,
 		imClient{client: a.IM},
 		a.IMTokenCache,
-		a.IMOutbox,
-		imjob.NewWorker(a.Users, imClient{client: a.IM}, a.IMOutbox, cfg.IM.OutboxBatchSize, timex.Now, log.Sugar()),
+		a.Outbox,
+		imjob.NewWorker(a.Users, imClient{client: a.IM}, a.Outbox, cfg.IM.OutboxBatchSize, timex.Now, log.Sugar()),
 		a.TokenIssuer,
 		account.Config{
 			AccessTTL:              cfg.Auth.AccessTTL,
@@ -138,7 +139,6 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 			LoginLockWindow:        cfg.Auth.LoginLockWindow,
 			IMAPIBaseURL:           imAPIBaseURL,
 			IMWSURL:                cfg.IM.WSURL,
-			IMOutboxBatchSize:      cfg.IM.OutboxBatchSize,
 		},
 		log.Sugar(),
 	)
