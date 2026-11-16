@@ -1,5 +1,4 @@
-// Package im 承载 IM 凭证与开通状态接口：token 兑换、状态查询与手动重试。
-package im
+package account
 
 import (
 	"github.com/gin-gonic/gin"
@@ -9,8 +8,8 @@ import (
 	"goim-business/internal/pkg/response"
 )
 
-// Token POST /api/v1/im/token
-func Token(a *app.App) gin.HandlerFunc {
+// IMToken POST /api/v1/im/token
+func IMToken(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		result, err := a.AccountService.IMToken(c.Request.Context(), middlewares.UserIDFrom(c), middlewares.PlatformIDFrom(c))
 		if err != nil {
@@ -21,8 +20,8 @@ func Token(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// Status GET /api/v1/im/status
-func Status(a *app.App) gin.HandlerFunc {
+// IMStatus GET /api/v1/im/status
+func IMStatus(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		result, err := a.AccountService.IMStatus(c.Request.Context(), middlewares.UserIDFrom(c))
 		if err != nil {
@@ -33,8 +32,8 @@ func Status(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// Retry POST /api/v1/im/retry
-func Retry(a *app.App) gin.HandlerFunc {
+// IMRetry POST /api/v1/im/retry
+func IMRetry(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middlewares.UserIDFrom(c)
 		if err := a.AccountService.RetryIMProvision(c.Request.Context(), userID); err != nil {

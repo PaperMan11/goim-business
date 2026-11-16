@@ -24,4 +24,11 @@ func InitRoutes(r *gin.RouterGroup, a *app.App) {
 	authed.GET("/sessions", Sessions(a))
 	authed.POST("/sessions/revoke", RevokeSession(a))
 	authed.PUT("/password", ChangePassword(a))
+
+	// IM 凭证属于账号域：仍挂在 /api/v1/im，但由账号 handler 统一注册。
+	imRoute := r.Group("/im")
+	imRoute.Use(authenticator.Middleware())
+	imRoute.POST("/token", limiter.IMToken(), IMToken(a))
+	imRoute.GET("/status", IMStatus(a))
+	imRoute.POST("/retry", limiter.IMToken(), IMRetry(a))
 }

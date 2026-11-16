@@ -32,7 +32,7 @@
 | 限流 | ✅ 已实现 | 登录/注册按 IP 固定窗口限流，失败关闭；登录失败按账号锁定 |
 | 可观测 | ✅ 已实现 | zap JSON、request_id、Recovery、Prometheus 指标、`/healthz`、`/readyz` |
 | 交付 | ✅ 已实现 | Makefile、Dockerfile、compose、GitHub Actions、migrations + `cmd/migrate` |
-| IM 凭证兑换 / 账号开通 | ✅ 已实现 | `internal/client/goim`、`internal/handler/im`、`internal/cache/im_token_cache.go`；outbox 仍 ⏳ |
+| IM 凭证兑换 / 账号开通 | ✅ 已实现 | `internal/client/goim`、`internal/handler/account`（IM handler）、`internal/cache/im_token_cache.go`；outbox 仍 ⏳ |
 | 用户资料 | ⏳ 规划中 | 表字段已预留（`avatar_key`/`bio`），无 `/profile` 路由与同步逻辑 |
 | 设备 | ⏳ 规划中 | 无 `devices` 表与路由 |
 | 客户端配置 | ⏳ 规划中 | 无配置表、无 `/client-config` 路由 |
@@ -406,7 +406,7 @@ refresh 规则（✅ 已实现）：
 
 **userID 约束：业务 userID 就是 IM userID，禁止再做映射或二次生成。** 注册落库后把 `account_users.id`（BIGINT）转字符串原样调用 `/user/user_register`；`/auth/get_user_token` 直接传该 userID；响应中的 IM 用户标识也用同一个 `userId`。
 
-三个接口位于 `internal/handler/im`，全部要求业务 access token 鉴权：
+三个接口位于 `internal/handler/account/im.go`，全部要求业务 access token 鉴权：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -715,8 +715,9 @@ goim-business/
 │   ├── handler/
 │   │   ├── routes.go               # gin.New + 全局中间件 + /api/v1
 │   │   └── account/
-│   │       ├── routes.go           # 账号路由注册
-│   │       └── account.go          # 7 个 handler
+│   │       ├── routes.go           # 账号与 IM 凭证路由注册
+│   │       ├── account.go          # 7 个账号 handler
+│   │       └── im.go               # 3 个 IM 凭证 handler
 │   ├── middlewares/
 │   │   ├── auth.go                 # Bearer access JWT + Redis 活跃标记
 │   │   ├── context.go              # gin.Context 键与读取函数
@@ -790,10 +791,10 @@ goim-business/
 ├── internal/
 │   ├── app/
 │   ├── config/
-│   ├── domain/{account,profile,device,file,im,clientconfig}/   # ⏳ 其他域
-│   ├── handler/{account,profile,im,device,file,clientconfig,notification,admin,internal}/
+│   ├── domain/{account,profile,device,file,clientconfig}/   # ⏳ 其他域
+│   ├── handler/{account,profile,device,file,clientconfig,notification,admin,internal}/
 │   ├── middlewares/                # 现有目录；未来增加 adminauth.go、idempotency.go
-│   ├── service/{account,profile,imtoken,device,file,clientconfig,notification,admin,outbox}/
+│   ├── service/{account,profile,device,file,clientconfig,notification,admin,outbox}/
 │   ├── repository/{account,profile,device,file,config,notification,audit,outbox}/
 │   ├── client/{goim,storage}/      # ⏳ goim HTTP / RustFS 预签名
 │   ├── job/{outbox_worker,file_cleanup,scheduler}/  # ⏳
