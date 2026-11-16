@@ -21,7 +21,7 @@
 
 新建一个 **Go + gin + gorm/MySQL + Redis + zap + Prometheus 的模块化单体服务 `goim-business`**，作为账号与业务身份的唯一事实源。**业务 userID 直接复用为 IM userID，不做任何映射**；通过服务端持有的 admin 凭证向 goim 兑换 IM token，让 Web/桌面端用 `LoginWithToken` 接入，彻底移除前端内置的 `adminSecret`。
 
-**当前落地状态**：账号域（注册、登录、刷新轮换、登出、会话列表、踢会话、改密）、access JWT 鉴权、Redis 会话活跃标记、登录/注册限流、日志/request_id/recovery/metrics、配置加载、数据库迁移、构建与 CI **已实现**；IM token 兑换与账号开通、用户资料、设备、客户端配置、文件、通知/推送、管理端、OAuth **仍为规划中**。本文保留完整蓝图，并逐章标注状态。
+**当前落地状态**：账号域（注册、登录、刷新轮换、登出、会话列表、踢会话、改密）、access JWT 鉴权、Redis 会话活跃标记、登录/注册限流、IM token 兑换与账号开通（`/im/token`、`/im/status`、`/im/retry`，含 Redis token 缓存与 IP 限流）、日志/request_id/recovery/metrics、配置加载、数据库迁移、构建与 CI **已实现**；用户资料、设备、客户端配置、文件、通知/推送、管理端、OAuth **仍为规划中**。本文保留完整蓝图，并逐章标注状态。
 
 ### 1.2 实现状态总览
 
@@ -32,7 +32,7 @@
 | 限流 | ✅ 已实现 | 登录/注册按 IP 固定窗口限流，失败关闭；登录失败按账号锁定 |
 | 可观测 | ✅ 已实现 | zap JSON、request_id、Recovery、Prometheus 指标、`/healthz`、`/readyz` |
 | 交付 | ✅ 已实现 | Makefile、Dockerfile、compose、GitHub Actions、migrations + `cmd/migrate` |
-| IM 凭证兑换 / 账号开通 | ⏳ 规划中 | 无 goim client、无 outbox、无 `/im` 路由 |
+| IM 凭证兑换 / 账号开通 | ✅ 已实现 | `internal/client/goim`、`internal/handler/im`、`internal/cache/im_token_cache.go`；outbox 仍 ⏳ |
 | 用户资料 | ⏳ 规划中 | 表字段已预留（`avatar_key`/`bio`），无 `/profile` 路由与同步逻辑 |
 | 设备 | ⏳ 规划中 | 无 `devices` 表与路由 |
 | 客户端配置 | ⏳ 规划中 | 无配置表、无 `/client-config` 路由 |
@@ -48,8 +48,8 @@
 | 能力 | 首版做法 | 为什么是核心 | 状态 |
 |---|---|---|---|
 | 账号与鉴权 | 自建 access JWT（默认 15 分钟）+ 不透明 refresh token（默认 30 天，轮换 + 重放检测） | goim 只有 24h access token，无 refresh；终端必须有自己的登录态 | ✅ 已实现 |
-| IM 凭证兑换 | `POST /api/v1/im/token`，服务端缓存 admin token 并向 goim 换取 user token | 不解决这一条，前端就只能继续内置 adminSecret，属于阻塞项 | ⏳ 规划中 |
-| IM 账号开通 | 注册时通过 outbox 调用 goim `/user/user_register`，资料变更同步 `/user/update_user_info` | 没有 IM user 投影，资料/会话/推送都查不到人 | ⏳ 规划中 |
+| IM 凭证兑换 | `POST /api/v1/im/token`，服务端缓存 admin token 并向 goim 换取 user token | 不解决这一条，前端就只能继续内置 adminSecret，属于阻塞项 | ✅ 已实现（Web 客户端改造 ⏳） |
+| IM 账号开通 | 注册后同步调用 goim `/user/user_register`，失败可通过 `/im/retry` 重试 | 没有 IM user 投影，资料/会话/推送都查不到人 | ✅ 已实现（outbox 与资料变更同步 ⏳） |
 | 用户资料（最小） | 昵称、头像 fileId、bio；MySQL 为事实源，goim 为投影 | 聊天界面必须显示昵称/头像 | ⏳ 规划中（字段已预留） |
 | 设备注册 | deviceID、平台、版本、最后活跃；支撑多端会话与踢出 | 多端登录是 Web + 桌面的现实场景 | ⏳ 规划中（会话层面已记录 deviceID） |
 | 客户端配置 | IM 地址、平台映射、上传限制、功能开关；版本 + ETag | 客户端换环境/开关不能靠重新发版 | ⏳ 规划中 |
@@ -100,14 +100,14 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
   └─ 文件上传：/third/* 预签名 → 直传 RustFS
 ```
 
-**当前已可用的前半段**：客户端调用 `POST /api/v1/account/register|login|refresh` 获得业务 access token；IM token 兑换与 `LoginWithToken` 尚未接入（⏳）。
+**当前已可用的前半段**：客户端调用 `POST /api/v1/account/register|login|refresh` 获得业务 access token，再调用 `POST /api/v1/im/token` 兑换 IM token（✅）；Web 客户端 `LoginWithToken` 接入仍 ⏳。
 
 ### 2.2 职责边界（明确做/不做）
 
 | 能力 | goim-business | goim | 说明 | 状态 |
 |---|---|---|---|---|
 | 账号密码、注册、登录、refresh、登出 | ✅ 唯一事实源 | ❌ | goim 的 user 是 IM 投影 | ✅ 已实现 |
-| IM token 签发 | ✅ 兑换并缓存 | ✅ 实际签发 | 业务不持有 goim JWT 签名密钥，避免越权 | ⏳ 规划中 |
+| IM token 签发 | ✅ 兑换并缓存 | ✅ 实际签发 | 业务不持有 goim JWT 签名密钥，避免越权 | ✅ 已实现 |
 | 用户资料 | ✅ 写 MySQL | ✅ 读投影 | 单向同步 | ⏳ 规划中 |
 | 好友/群/会话/消息 | ❌ 不落库 | ✅ | 业务只在管理端做只读检索/聚合 | ❌ 不做（B/C 档） |
 | 文件字节 | ❌ 不代理 | ✅ RustFS 直传 | 业务只做签名与元数据 | ⏳ 规划中 |
@@ -118,8 +118,8 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 
 ### 2.3 业务后端必须补充的“现状未覆盖职责”
 
-1. **IM 账号开通器（User Provisioning）**（⏳）：注册/注销时同步 goim user，失败可重试，状态可查询。**业务 userID 即 IM userID**，开通时原样写入，不生成第二套 ID。当前只预留了 `account_users.im_status/im_synced_at` 字段，无同步逻辑。
-2. **IM Token Broker**（⏳）：admin token 缓存、按 `(userID, platformID)` 复用 user token、限频。
+1. **IM 账号开通器（User Provisioning）**（✅）：注册后同步 goim user，失败可重试，状态可查询。**业务 userID 即 IM userID**，开通时原样写入，不生成第二套 ID。当前已写入 `account_users.im_status/im_synced_at`；outbox 与注销同步仍 ⏳。
+2. **IM Token Broker**（✅）：admin token 缓存、按 `(userID, platformID)` 复用 user token、IP 限频。
 3. **设备注册表**（⏳）：deviceID、平台、版本、推送 token、最后活跃时间；支撑多端踢出与推送。当前会话表已记录 `device_id`，但没有独立设备表。
 4. **业务文件资产**（⏳）：首版只做头像；后续扩展反馈截图、后台素材的对象 key、配额、审计；与聊天附件分桶/分前缀。
 5. **配置中心**（⏳）：客户端配置、功能开关、IM 地址与平台映射，版本化下发。
@@ -135,7 +135,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 | 业务域 | 分档 | 当前状态 | 首版行为 | 扩展点 |
 |---|---|---|---|---|
 | 账号 / 会话 / 令牌 | A | ✅ 已实现 | 注册、登录、刷新、登出、会话列表、踢会话、改密 | OAuth、短信、2FA、注销 |
-| IM 凭证 | A | ⏳ 规划中 | admin token 缓存 + user token 兑换 + 状态查询（尚未注册路由） | 多租户 issuer、按 App 的 secret |
+| IM 凭证 | A | ✅ 已实现 | admin token 缓存 + user token 兑换（Redis 缓存/限流）+ 状态查询与手动重试 | 多租户 issuer、按 App 的 secret |
 | 用户资料 | A（最小） | ⏳ 规划中 | 昵称/头像/bio；批量公开资料（尚未注册路由） | 扩展字段、敏感词、资料审核 |
 | 设备 | A（最小） | ⏳ 规划中 | 注册、列表、移除（尚未注册路由） | 推送 token、设备风控 |
 | 客户端配置 | A | ⏳ 规划中 | 版本化配置 + ETag + schema（尚未注册路由） | 灰度、按用户/租户覆盖、A/B |
@@ -353,7 +353,7 @@ sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 - 类型转换统一使用 `internal/pkg/convert`。
 - 不使用 gorm hook 做远程调用。
 
-### 4.5 接口鉴权方案（✅ 账号令牌已实现；⏳ IM token 规划中）
+### 4.5 接口鉴权方案（✅ 账号令牌与 IM token 已实现）
 
 **结论：业务自建双令牌体系；IM token 由业务服务端兑换，客户端只用 `LoginWithToken`。**
 
@@ -363,7 +363,7 @@ sqlDB.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 |---|---|---|---|---|---|
 | access | JWT HS256，含 `sid/pid/did/roles` | 15 分钟（`auth.access_ttl`） | 客户端内存；`Authorization: Bearer` | 调业务 API | ✅ 已实现 |
 | refresh | 32 字节安全随机数，Base64 RawURL 编码（不透明） | 30 天（`auth.refresh_ttl=720h`，固定过期，非滑动） | 响应体 `refreshToken`；刷新请求体字段；DB 存 SHA-256 hex | 换新 access/refresh | ✅ 已实现 |
-| IM token | goim JWT | 24h（goim 配置） | SDK TokenStore | WS/IM HTTP | ⏳ 规划中 |
+| IM token | goim JWT，服务端按 `(userID, platformID)` 缓存 | 24h（goim 配置） | SDK TokenStore | WS/IM HTTP | ✅ 已实现 |
 
 access claims（实际签发；`RegisteredClaims` 补 `iss/aud/sub/iat/exp/jti`）：
 
@@ -402,32 +402,51 @@ refresh 规则（✅ 已实现）：
 
 **Cookie 方案**：原蓝图设想 Web 用 HttpOnly + Secure + SameSite=Lax Cookie；当前实现统一通过 JSON 响应体下发 `refreshToken`、请求体回传，Cookie 下发/读取未实现（⏳）。`X-Client-Platform` 只影响新会话的平台记录，不区分 refresh 的传递方式。
 
-#### IM token 兑换（⏳ 规划中，未注册路由）
+#### IM token 兑换（✅ 已实现）
 
 **userID 约束：业务 userID 就是 IM userID，禁止再做映射或二次生成。** 注册落库后把 `account_users.id`（BIGINT）转字符串原样调用 `/user/user_register`；`/auth/get_user_token` 直接传该 userID；响应中的 IM 用户标识也用同一个 `userId`。
 
-```
-POST /api/v1/im/token   （业务 access token 鉴权）
-  → 校验 user 状态、平台取值合法
-  → Redis 命中 im:token:{userID}:{platformID} 且剩余 > 10min：直接返回
-  → 否则 singleflight：
-       1) 取 admin token（Redis 缓存，提前 5 分钟刷新）
-          POST /auth/get_admin_token  {secret, userID:"imAdmin"}
-       2) POST /auth/get_user_token {userID, platformID}
-          Header: token=<adminToken>, operationID=<uuid>
-       3) 写 Redis，TTL = expire - 10min
-  → 返回 {userId, token, expireTimeSeconds, apiBaseUrl, wsUrl, platformId}
+三个接口位于 `internal/handler/im`，全部要求业务 access token 鉴权：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/v1/im/token` | 平台取自 access token claims 的 `pid`，请求体为空；额外受 IP 限流 |
+| GET | `/api/v1/im/status` | 返回 IM 开通状态 |
+| POST | `/api/v1/im/retry` | 重新开通后返回与 status 相同的结构；额外受 IP 限流 |
+
+`POST /im/token` 实际响应（`types.IMTokenResp`）：
+
+```json
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "userId": "123",
+    "token": "eyJ...",
+    "expireTimeSeconds": 86400,
+    "apiBaseUrl": "https://im.example.com/api/v1",
+    "wsUrl": "wss://im.example.com/ws",
+    "platformId": 5
+  }
+}
 ```
 
-关键点：
+`GET /im/status` 与 `POST /im/retry` 的 data（`types.IMStatusResp`）为 `{ "userId": "123", "status": 1, "syncedAt": "2026-11-16T10:00:00+08:00" }`；`status` 0 待开通 / 1 已开通 / 2 失败，未开通完成时 `syncedAt` 为 null。
 
+关键实现：
+
+- 平台只从 access token claims 读取，不接受客户端改写；非法平台（<1、10、>11）返回 `1001`。
+- 兑换前校验账号可登录（冻结 `2003`、其他 `1002`）、IM 已配置（未配置 `9002`）、`im_status=1`（未就绪 `9002`）。
+- Redis 缓存键 `{prefix}:im:token:{userID}:{platformID}`，value 为 `{"token":"...","expireAt":unix秒}`；TTL = 剩余有效期 - 10 分钟，剩余不足 10 分钟时不写缓存但仍返回。
+- 缓存命中直接返回；Redis 读失败只记日志并继续向 IM 兑换（fail-open），写失败只记日志。
+- 兑换失败返回 `9002`；admin token 由 goim 客户端内部加锁缓存，并提前 `im.token_refresh_ahead` 刷新。
+- `/im/token`、`/im/retry` 受 IP 固定窗口限流（默认 30 次/分钟，`ratelimit.im_token_per_minute`，<=0 关闭），超限 `1029`。
 - **必须按 `(userID, platformID)` 缓存 IM token**。`allow_multi` 下每平台最多 3 个连接，每次登录都换新 token 会挤掉旧端。
-- goim 所有请求必须带 `operationID` 头（否则 1001），必须用 `token` 头而非 `Authorization`。
-- admin token 用 singleflight 防击穿；secret 仅存在环境变量。
+- goim 所有请求必须带 `operationID` 头（否则 1001），必须用 `token` 头而非 `Authorization`；secret 仅存在环境变量。
 - 客户端 SDK 配 `TokenProvider`：IM token 临近过期时回调业务 `/im/token`，拿新 token 后 `UpdateToken`/刷新。
 - 业务不自行签发 goim JWT，避免与 goim 的 `issuer`/多租户改造冲突。
 
-#### 平台 ID 约定（✅ 服务端解析已实现；IM 下发 ⏳）
+#### 平台 ID 约定（✅ 服务端解析与 IM token 下发已实现）
 
 | 客户端 | platformID |
 |---|---|
@@ -475,7 +494,7 @@ POST /api/v1/im/token   （业务 access token 鉴权）
 - gorm 慢查询（>200ms，`mysql.slow_threshold`）单独走 Warn 日志，带 SQL 摘要。
 - 采样策略（debug/info 全量、健康检查降级）尚未配置（⏳）。
 
-### 4.8 限流与防刷（✅ 登录/注册 IP 限流；其余 ⏳）
+### 4.8 限流与防刷（✅ 登录/注册/IM token IP 限流；其余 ⏳）
 
 **结论：当前实现为 Redis 固定窗口计数（INCR + EXPIRE），按 IP 维度；不是滑动窗口。**
 
@@ -483,6 +502,7 @@ POST /api/v1/im/token   （业务 access token 鉴权）
 |---|---|---|---|---|
 | 登录 | IP | 5 次/分钟（`ratelimit.login_per_minute`） | 失败关闭：Redis 异常返回 `9002` | ✅ |
 | 注册 | IP | 3 次/小时（`ratelimit.register_per_hour`） | 失败关闭：Redis 异常返回 `9002` | ✅ |
+| IM token 兑换/重试 | IP | 30 次/分钟（`ratelimit.im_token_per_minute`，<=0 关闭） | 失败关闭：Redis 异常返回 `9002` | ✅ |
 | 登录失败锁定 | 账号（loginName 归一化） | 连续失败 10 次，窗口 15 分钟（`auth.login_lock_*`） | 达到阈值返回 `1029`；登录成功清零 | ✅ |
 | 刷新令牌 | session | 30 次/小时 | — | ⏳ |
 | 发验证码 | 账号 + IP | 1 次/60s、5 次/天 | — | ⏳ |
@@ -503,7 +523,7 @@ POST /api/v1/im/token   （业务 access token 鉴权）
 
 **结论：原计划 OpenAPI 3 设计先行（`api/openapi.yaml`）+ `oapi-codegen` 生成 gin 路由与 DTO。**
 
-当前已在 `api/openapi.yaml` 落地账号域 7 个接口的最小 OpenAPI 3.0.3 契约（路由、DTO、统一响应、错误码与鉴权均按现有实现描述），并由 `api/openapi_test.go` 做守护测试；仍不引入 Swagger UI 与代码生成，`go.mod` 也没有 `oapi-codegen`/`kin-openapi` 依赖。后续全量契约的落地流程保持不变：
+当前已在 `api/openapi.yaml` 落地账号域 7 个接口与 IM 域 3 个接口的 OpenAPI 3.0.3 契约（路由、DTO、统一响应、错误码与鉴权均按现有实现描述），并由 `api/openapi_test.go` 做守护测试；仍不引入 Swagger UI 与代码生成，`go.mod` 也没有 `oapi-codegen`/`kin-openapi` 依赖。后续全量契约的落地流程保持不变：
 
 1. 先改 `api/openapi.yaml`，PR 中评审契约；只写已实现 operation。
 2. `go generate ./...` 重新生成 handler 绑定代码。
@@ -848,7 +868,7 @@ CREATE TABLE account_users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 ```
 
-> `id` 即业务 userID，未来注册 IM 时原样转字符串传给 goim `/user/user_register`，不设 `im_user_id`、不做映射。`avatar_key/bio/im_status/im_synced_at` 当前只建表，无资料/同步接口。
+> `id` 即业务 userID，未来注册 IM 时原样转字符串传给 goim `/user/user_register`，不设 `im_user_id`、不做映射。`avatar_key/bio` 当前只建表、无资料接口；`im_status/im_synced_at` 由 IM 开通流程写入。
 
 ### 7.2 `account_credentials`（✅ 已实现）
 
@@ -1025,17 +1045,18 @@ CREATE TABLE audit_logs (
 }
 ```
 
-注册请求额外支持可选 `nickname`；refresh 请求为 `{ "refreshToken": "..." }`；踢会话请求为 `{ "sessionId": "456" }`；改密请求为 `{ "oldPassword": "...", "newPassword": "..." }`。当前响应**不包含 IM 信息**；`im` 字段属于 M2 蓝图（⏳）。
+注册请求额外支持可选 `nickname`；refresh 请求为 `{ "refreshToken": "..." }`；踢会话请求为 `{ "sessionId": "456" }`；改密请求为 `{ "oldPassword": "...", "newPassword": "..." }`。账号响应**不包含 IM 信息**，IM 凭证统一走 `/im/token`（✅）。
 
-### 8.2 IM 凭证 `/im`（⏳ 规划中，未注册路由）
+### 8.2 IM 凭证 `/im`（✅ 已实现）
 
 | 方法 | 路径 | 鉴权 | 说明 | 状态 |
 |---|---|---|---|---|
-| POST | `/im/token` | 🔐 | 获取/刷新当前设备平台的 IM token | ⏳ |
-| GET | `/im/status` | 🔐 | IM 账号开通状态与重试 | ⏳ |
+| POST | `/im/token` | 🔐 + IP 限流 | 获取当前设备平台的 IM token（按 `(userId, platformId)` 缓存） | ✅ |
+| GET | `/im/status` | 🔐 | IM 账号开通状态（0 待开通 / 1 已开通 / 2 失败） | ✅ |
+| POST | `/im/retry` | 🔐 + IP 限流 | 手动重试 IM 开通，返回与 status 相同的结构 | ✅ |
 
-请求：`{ "platformId": 5, "deviceId": "web-abc" }`（platform 由服务端从会话推导，客户端传值仅校验）。
-响应：`{ userId, token, expireTimeSeconds, apiBaseUrl, wsUrl, platformId, status }`。`userId` 同时就是 IM userID。
+请求：`POST /im/token` 无请求体；平台取自 access token 的 claims，客户端不能改写。
+响应：`IMTokenResp` 为 `{ userId, token, expireTimeSeconds, apiBaseUrl, wsUrl, platformId }`，`IMStatusResp` 为 `{ userId, status, syncedAt }`；详见 §4.5。`userId` 同时就是 IM userID。
 
 ### 8.3 资料 `/profile`（⏳ 规划中，未注册路由）
 
@@ -1165,7 +1186,7 @@ CREATE TABLE audit_logs (
 
 ## 9. 关键流程
 
-### 9.1 注册（✅ 已实现）与 IM 开通（⏳ 规划中）
+### 9.1 注册（✅ 已实现）与 IM 开通（✅ 已实现；outbox ⏳）
 
 当前实际流程：
 
@@ -1182,19 +1203,17 @@ client → POST /api/v1/account/register（X-Client-Platform 可选）
   response: {code:0,data:{user,token,refreshToken,...,sessionId,platform}}
 ```
 
-IM 开通属于目标蓝图（⏳，未实现）：
+当前 IM 开通为同步调用（outbox 异步化仍 ⏳）：
 
 ```
-  事务内写 outbox：topic=im.user.provision
-  outbox worker:
-    → /user/account_check（幂等判断）
-    → /user/user_register（admin token）
-    → /user/update_user_info（昵称/头像）
-    → 更新 account_users.im_status=ready
-  client → POST /im/token → LoginWithToken
+注册成功且 IM 已配置 → POST /user/user_register（admin token）
+  成功 → im_status=1，记录 synced_at
+  失败 → im_status=2（不影响注册结果），日志告警
+client → POST /im/token → LoginWithToken
+  未就绪（im_status != 1）→ 9002，可调用 POST /im/retry 手动重试开通
 ```
 
-选择 outbox 而非同步调用：goim 抖动不应导致注册失败；但登录时若 `im_status != ready`，`/im/token` 会先同步重试一次，仍失败则返回 `9002`。
+同步调用避免为单次远程调用引入 outbox 复杂度；goim 抖动只影响 IM 开通，不影响账号注册。
 
 ### 9.2 令牌刷新（✅ 已实现）
 
@@ -1210,12 +1229,12 @@ client → POST /api/v1/account/refresh {refreshToken}
     6. 签发新 access（新 sid）
 ```
 
-### 9.3 IM token 刷新（⏳ 规划中，SDK TokenProvider）
+### 9.3 IM token 刷新（✅ 业务接口已实现；SDK TokenProvider 改造 ⏳）
 
 ```
 SDK token 即将过期 → 回调宿主 → POST /im/token（业务 access）
-  → Redis 命中且剩余 >10min 直接返回
-  → 否则 singleflight 向 goim 换新 → 返回
+  → Redis 命中直接返回（写入时已扣除 10 分钟安全窗口）
+  → 否则向 goim 换新并按剩余有效期回写缓存 → 返回
 宿主 → SDK UpdateToken / 重新 LoginWithToken
 ```
 
@@ -1277,11 +1296,13 @@ POST /admin/announcements
 - **只做 A 档账号域**：不实现资料/设备/配置/文件，不注册任何 B/C 档路由，不做管理端。✅
 - 验收：多端登录（Web + 任一桌面形态）互不影响；refresh 轮换与重放检测有单测；连续失败触发锁定；错误码与响应格式统一；账号接口有最小 OpenAPI 契约。✅
 
-### M2 IM 对接闭环（⏳ 未开始）
+### M2 IM 对接闭环（🚧 进行中：后端接口已完成，Web 客户端改造 ⏳）
 
-- goim 客户端（admin token 缓存、singleflight、错误归一）；user provisioning（outbox）；`/im/token`；`/im/status`；平台 ID 约定。
-- 同时改造 `goim-web-chat`：移除 `adminSecret`，改 `loginWithToken` + `TokenProvider`，`VITE_GOIM_PLATFORM_ID=5`。
-- 验收：用业务账号在 Web 登录，能收发消息、拉历史；IM token 过期后自动刷新；前端产物中搜不到 admin secret。
+- goim 客户端（admin token 缓存、错误归一）；user provisioning（同步开通 + 手动重试）；`/im/token`；`/im/status`；`/im/retry`；平台 ID 约定。
+  - goim 客户端底座 + 注册开通 + token 兑换（Redis 缓存、IP 限流、缓存 fail-open）：✅ 已实现。
+  - outbox 异步化仍 ⏳；当前注册后同步开通，失败写 `im_status=2`，可调用 `/im/retry` 重试。
+- 同时改造 `goim-web-chat`：移除 `adminSecret`，改 `loginWithToken` + `TokenProvider`，`VITE_GOIM_PLATFORM_ID=5`。⏳
+- 验收：用业务账号在 Web 登录，能收发消息、拉历史；IM token 过期后自动刷新；前端产物中搜不到 admin secret。⏳（待客户端改造后验收）
 
 ### M3 资料 / 设备 / 客户端配置（⏳ 未开始）
 
@@ -1292,7 +1313,7 @@ POST /admin/announcements
 
 - RustFS 预签名、complete 校验、访问 URL、头像配额、孤儿清理。
 - 验收：头像全链路；超大/非法类型被拒；未 complete 的对象 24h 清理。
-- **首版门禁**：M0-M4 全部通过、Web 端完成 token 改造、压测与回滚演练通过后即可发布；B 档未实现不影响发布。当前 M2-M4 均未开始，尚不满足发布门禁。
+- **首版门禁**：M0-M4 全部通过、Web 端完成 token 改造、压测与回滚演练通过后即可发布；B 档未实现不影响发布。当前 M2 进行中（后端已完成、Web 客户端改造 ⏳），M3-M4 未开始，尚不满足发布门禁。
 
 ### M5 上线加固（⏳ 未开始，与 M4 并行收尾）
 
@@ -1354,11 +1375,11 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 - [x] ✅ M1：多端登录互不影响，超限踢最旧，登出/踢出即时生效。
 - [x] ✅ M1：`userID` 即 IM userID，注册流程原样写入，无映射层（IM 下发待 M2）。
 - [x] ✅ M1：统一错误码与响应格式覆盖所有账号接口；敏感字段不落日志。
-- [x] ✅ M1：账号接口在最小 OpenAPI/代码中可查；`api/openapi.yaml` 已覆盖 7 个账号接口。
+- [x] ✅ M1：账号接口在最小 OpenAPI/代码中可查；`api/openapi.yaml` 已覆盖 7 个账号接口与 3 个 IM 接口。
 - [x] ✅ `/healthz`、`/readyz`、`/metrics` 已独立端口暴露。
 - [x] ✅ 日志字段规范落地，request_id 贯通；`X-Request-ID` 回写。
 - [x] ✅ 登录/注册限流可配置，限流实现已落地（防刷用例已补：`internal/middlewares/ratelimit_test.go`）。
-- [ ] ⏳ M2+：`/im/token` 有缓存、singleflight、限频、依赖失败降级。
+- [x] ✅ M2：`/im/token` 有 Redis token 缓存（按 userID+platform、TTL 扣 10 分钟）、IP 限频、依赖失败降级；`/im/status`、`/im/retry` 已注册。
 - [ ] ⏳ M2+：Web 聊天室移除 adminSecret，平台 ID 改为 5，登录走业务 token。
 - [ ] ⏳ M2+：outbox worker 可重试、可观测、积压有告警。
 - [x] ✅ 镜像可构建；迁移入口已提供（`bin/migrate up|down|version`）。
@@ -1376,7 +1397,8 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 2. **账号域纵切（✅ 已完成）**：`account_users` / `account_credentials` / `account_sessions` 迁移 → 仓储 → 注册 → 登录 → 签发 access/refresh → 刷新轮换 → 登出/踢出 → 改密。
 3. **安全与多端（✅ 已完成）**：argon2id、refresh 哈希与重放检测、Redis 活跃会话、每用户/每平台会话上限、登录/注册限流、登录失败锁定。
 4. **验收（✅ 已完成）**：`go test ./...` 全绿；空库迁移成功；curl 跑通注册→登录→刷新→登出；多端会话互不影响；日志无敏感字段。
+5. **M2 IM 对接（🚧 进行中）**：goim 客户端、注册同步开通与手动重试、`/im/token`（Redis 缓存 + IP 限流）、`/im/status`、`/im/retry` 已完成；Web 客户端 `adminSecret` 改造仍 ⏳。
 
-未包含（⏳ 后续 M2+）：资料/设备/配置/文件域、IM token 兑换与账号开通、B/C 档路由、管理端、OpenAPI 全量契约（当前仅账号域最小契约）、outbox、RustFS/推送。
+未包含（⏳ 后续 M2+）：资料/设备/配置/文件域、B/C 档路由、管理端、OpenAPI 全量契约（当前仅账号域与 IM 域最小契约）、outbox、RustFS/推送。
 
 代码不自动提交，提交时机与粒度由用户决定。
