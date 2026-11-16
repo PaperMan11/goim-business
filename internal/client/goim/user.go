@@ -27,6 +27,11 @@ type registerUser struct {
 	FaceURL  string `json:"faceURL"`
 }
 
+// updateUserInfoRequest 是 /user/update_user_info 的请求体。
+type updateUserInfoRequest struct {
+	UserInfo registerUser `json:"userInfo"`
+}
+
 // RegisterUser 在 IM 侧开通用户，需要 admin token。
 //
 // 幂等语义：goim 返回业务码 1102（用户已注册）视为开通成功并返回 nil。
@@ -48,4 +53,19 @@ func (c *Client) RegisterUser(ctx context.Context, u UserInfo) error {
 		return nil
 	}
 	return err
+}
+
+// UpdateUserInfo 把昵称与头像同步到 IM，需要 admin token。
+// goim 要求全量提交用户信息，调用方需传入当前完整资料。
+func (c *Client) UpdateUserInfo(ctx context.Context, u UserInfo) error {
+	if !c.Enabled() {
+		return ErrDisabled
+	}
+	return c.doWithAdminToken(ctx, methodUpdateUserInfo, "/user/update_user_info", updateUserInfoRequest{
+		UserInfo: registerUser{
+			UserID:   u.UserID,
+			Nickname: u.Nickname,
+			FaceURL:  u.AvatarURL,
+		},
+	}, nil)
 }

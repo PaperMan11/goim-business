@@ -11,10 +11,11 @@ type IMToken struct {
 	ExpireAt time.Time
 }
 
-// IMClient 负责在 IM 侧开通账号并兑换用户 token。
+// IMClient 负责在 IM 侧开通账号、同步资料并兑换用户 token。
 type IMClient interface {
 	Enabled() bool
 	RegisterUser(ctx context.Context, userID, nickname string) error
+	UpdateUserInfo(ctx context.Context, userID, nickname, avatarURL string) error
 	UserToken(ctx context.Context, userID string, platformID int) (*IMToken, error)
 }
 

@@ -21,7 +21,7 @@
 
 新建一个 **Go + gin + gorm/MySQL + Redis + zap + Prometheus 的模块化单体服务 `goim-business`**，作为账号与业务身份的唯一事实源。**业务 userID 直接复用为 IM userID，不做任何映射**；通过服务端持有的 admin 凭证向 goim 兑换 IM token，让 Web/桌面端用 `LoginWithToken` 接入，彻底移除前端内置的 `adminSecret`。
 
-**当前落地状态**：账号域（注册、登录、刷新轮换、登出、会话列表、踢会话、改密）、access JWT 鉴权、Redis 会话活跃标记、登录/注册限流、IM token 兑换与账号开通（`/im/token`、`/im/status`、`/im/retry`，含 Redis token 缓存与 IP 限流）、日志/request_id/recovery/metrics、配置加载、数据库迁移、构建与 CI **已实现**；用户资料、设备、客户端配置、文件、通知/推送、管理端、OAuth **仍为规划中**。本文保留完整蓝图，并逐章标注状态。
+**当前落地状态**：账号域（注册、登录、刷新轮换、登出、会话列表、踢会话、改密）、access JWT 鉴权、Redis 会话活跃标记、登录/注册限流、IM token 兑换与账号开通（`/im/token`、`/im/status`、`/im/retry`，含 Redis token 缓存与 IP 限流）、用户资料最小闭环（`/profile` CRUD + 单向同步 goim）、日志/request_id/recovery/metrics、配置加载、数据库迁移、构建与 CI **已实现**；设备、客户端配置、文件、通知/推送、管理端、OAuth **仍为规划中**。本文保留完整蓝图，并逐章标注状态。
 
 ### 1.2 实现状态总览
 
@@ -32,8 +32,8 @@
 | 限流 | ✅ 已实现 | 登录/注册按 IP 固定窗口限流，失败关闭；登录失败按账号锁定 |
 | 可观测 | ✅ 已实现 | zap JSON、request_id、Recovery、Prometheus 指标、`/healthz`、`/readyz` |
 | 交付 | ✅ 已实现 | Makefile、Dockerfile、compose、GitHub Actions、migrations + `cmd/{api,migrate,cron}` |
-| IM 凭证兑换 / 账号开通 | ✅ 已实现 | `internal/client/goim`、`internal/handler/account`（IM handler）、`internal/cache/im_token_cache.go`；IM 开通 outbox 补偿 ✅ |
-| 用户资料 | ⏳ 规划中 | 表字段已预留（`avatar_key`/`bio`），无 `/profile` 路由与同步逻辑 |
+| IM 凭证兑换 / 账号开通 | ✅ 已实现 | `internal/client/goim`、`internal/handler/account`（IM handler）、`internal/cache/im_token_cache.go`；IM 开通 outbox 补偿 ✅；资料同步 `profile_sync` ✅ |
+| 用户资料 | ✅ 最小闭环 | `/profile` 路由 + `profile_sync` outbox；头像仅存 `avatar_key`，预签名 URL/上传待 M4 |
 | 设备 | ⏳ 规划中 | 无 `devices` 表与路由 |
 | 客户端配置 | ⏳ 规划中 | 无配置表、无 `/client-config` 路由 |
 | 文件 | ⏳ 规划中 | 无 RustFS client、无 `/files` 路由 |
@@ -48,9 +48,9 @@
 | 能力 | 首版做法 | 为什么是核心 | 状态 |
 |---|---|---|---|
 | 账号与鉴权 | 自建 access JWT（默认 15 分钟）+ 不透明 refresh token（默认 30 天，轮换 + 重放检测） | goim 只有 24h access token，无 refresh；终端必须有自己的登录态 | ✅ 已实现 |
-| IM 凭证兑换 | `POST /api/v1/im/token`，服务端缓存 admin token 并向 goim 换取 user token | 不解决这一条，前端就只能继续内置 adminSecret，属于阻塞项 | ✅ 已实现（Web 客户端改造 ⏳） |
-| IM 账号开通 | 注册后同步调用 goim `/user/user_register`，失败进入 outbox 补偿，也可通过 `/im/retry` 手动重试 | 没有 IM user 投影，资料/会话/推送都查不到人 | ✅ 已实现（outbox ✅；资料变更同步 ⏳） |
-| 用户资料（最小） | 昵称、头像 fileId、bio；MySQL 为事实源，goim 为投影 | 聊天界面必须显示昵称/头像 | ⏳ 规划中（字段已预留） |
+| IM 凭证兑换 | `POST /api/v1/im/token`，服务端缓存 admin token 并向 goim 换取 user token | 不解决这一条，前端就只能继续内置 adminSecret，属于阻塞项 | ✅ 已实现（含 Web 客户端 `loginWithToken` 接入） |
+| IM 账号开通 | 注册后同步调用 goim `/user/user_register`，失败进入 outbox 补偿，也可通过 `/im/retry` 手动重试 | 没有 IM user 投影，资料/会话/推送都查不到人 | ✅ 已实现（开通 outbox ✅；资料变更同步 ✅） |
+| 用户资料（最小） | 昵称、头像 fileId、bio；MySQL 为事实源，goim 为投影 | 聊天界面必须显示昵称/头像 | ✅ 已实现（头像上传/预签名 URL 待 M4） |
 | 设备注册 | deviceID、平台、版本、最后活跃；支撑多端会话与踢出 | 多端登录是 Web + 桌面的现实场景 | ⏳ 规划中（会话层面已记录 deviceID） |
 | 客户端配置 | IM 地址、平台映射、上传限制、功能开关；版本 + ETag | 客户端换环境/开关不能靠重新发版 | ⏳ 规划中 |
 | 文件（仅头像） | 复用 RustFS：预签名 PUT + complete 校验 + 现签 GET | 头像上传是资料闭环的一部分；聊天附件继续走 goim `/third/*` | ⏳ 规划中 |
@@ -100,7 +100,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
   └─ 文件上传：/third/* 预签名 → 直传 RustFS
 ```
 
-**当前已可用的前半段**：客户端调用 `POST /api/v1/account/register|login|refresh` 获得业务 access token，再调用 `POST /api/v1/im/token` 兑换 IM token（✅）；Web 客户端 `LoginWithToken` 接入仍 ⏳。
+**当前已可用的前半段**：客户端调用 `POST /api/v1/account/register|login|refresh` 获得业务 access token，再调用 `POST /api/v1/im/token` 兑换 IM token（✅）；Web 客户端已改为业务账号登录 + `LoginWithToken`，并在 IM token 到期前自动续期（✅ 代码层闭环，端到端联调待环境）。
 
 ### 2.2 职责边界（明确做/不做）
 
@@ -108,7 +108,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 |---|---|---|---|---|
 | 账号密码、注册、登录、refresh、登出 | ✅ 唯一事实源 | ❌ | goim 的 user 是 IM 投影 | ✅ 已实现 |
 | IM token 签发 | ✅ 兑换并缓存 | ✅ 实际签发 | 业务不持有 goim JWT 签名密钥，避免越权 | ✅ 已实现 |
-| 用户资料 | ✅ 写 MySQL | ✅ 读投影 | 单向同步 | ⏳ 规划中 |
+| 用户资料 | ✅ 写 MySQL | ✅ 读投影 | 单向同步（MySQL → goim `update_user_info`，outbox 补偿） | ✅ 最小闭环 |
 | 好友/群/会话/消息 | ❌ 不落库 | ✅ | 业务只在管理端做只读检索/聚合 | ❌ 不做（B/C 档） |
 | 文件字节 | ❌ 不代理 | ✅ RustFS 直传 | 业务只做签名与元数据 | ⏳ 规划中 |
 | 设备与多端会话 | ✅ | ✅ IM 连接维度 | 业务管账号会话，goim 管连接 | 业务会话 ✅ / 设备表 ⏳ |
@@ -136,7 +136,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 |---|---|---|---|---|
 | 账号 / 会话 / 令牌 | A | ✅ 已实现 | 注册、登录、刷新、登出、会话列表、踢会话、改密 | OAuth、短信、2FA、注销 |
 | IM 凭证 | A | ✅ 已实现 | admin token 缓存 + user token 兑换（Redis 缓存/限流）+ 状态查询与手动重试 | 多租户 issuer、按 App 的 secret |
-| 用户资料 | A（最小） | ⏳ 规划中 | 昵称/头像/bio；批量公开资料（尚未注册路由） | 扩展字段、敏感词、资料审核 |
+| 用户资料 | A（最小） | ✅ 已实现 | 昵称/头像 key/bio；批量公开资料（`/profile` 路由已注册） | 扩展字段、敏感词、资料审核 |
 | 设备 | A（最小） | ⏳ 规划中 | 注册、列表、移除（尚未注册路由） | 推送 token、设备风控 |
 | 客户端配置 | A | ⏳ 规划中 | 版本化配置 + ETag + schema（尚未注册路由） | 灰度、按用户/租户覆盖、A/B |
 | 文件 | A（仅头像） | ⏳ 规划中 | presign、complete、访问 URL（尚未注册路由） | 通用附件、配额、审核、CDN |
@@ -651,11 +651,11 @@ CREATE TABLE outbox_events (
 );
 ```
 
-当前已落地的实现：注册事务内写入 `provision_im`，同步开通成功标记 `status=1`，失败标记 `status=2` 并按 `next_retry_at = now + 2^attempts 分钟` 退避（上限 1 小时，attempts 从 1 起算）。`cmd/cron` 通过 `internal/cron` 的 `Scheduler` 注册任务，底层使用 `robfig/cron/v3`；IM 开通任务的表达式为 `@every im.outbox_scan_interval`（默认 60s），每轮先抢名为 `im_outbox` 的 Redis 锁（TTL 5 分钟，抢不到说明其他实例在跑，直接跳过），再扫描一批（`im.outbox_batch_size`，默认 20）`next_retry_at <= now` 的记录；已 Ready 的用户直接标记完成，不再调用 goim。
+当前已落地的实现：注册事务内写入 `provision_im`，资料更新事务内写入 `profile_sync`；两条任务均由 `internal/job/im` 的 worker 处理。同步成功标记 `status=1`，失败标记 `status=2` 并按 `next_retry_at = now + 2^attempts 分钟` 退避（上限 1 小时，attempts 从 1 起算）；`profile_sync` 在用户 IM 状态未 Ready 时同样进入退避重试，等开通完成后再同步。`cmd/cron` 通过 `internal/cron` 的 `Scheduler` 注册任务，底层使用 `robfig/cron/v3`；IM outbox 任务的表达式为 `@every im.outbox_scan_interval`（默认 60s），每轮先抢名为 `im_outbox` 的 Redis 锁（TTL 5 分钟，抢不到说明其他实例在跑，直接跳过），再扫描一批（`im.outbox_batch_size`，默认 20）`next_retry_at <= now` 的记录；provision 任务对已 Ready 的用户直接标记完成，不再调用 goim。
 
 新增定时任务只需实现 `cron.Job`（`Name` / `Spec` / `Timeout` / `Run`）并在 `cmd/cron` 注册；锁键自动为 `{redis.key_prefix}:{env}:cron:{name}`，不同任务使用不同锁，不会相互阻塞。`Timeout` 必须小于锁 TTL（当前 5 分钟）。
 
-通用 `outbox_events` 已落地（000002）；后续可扩展 `topic`/`aggregate_id` 字段以承载资料同步等更多 action，并计划用 `SELECT ... FOR UPDATE SKIP LOCKED` 批量取任务、超过阈值进死信状态并告警。worker 已完全独立：实现位于 `internal/job/im`（`Worker.Provision/Settle/RunDue`），账号域只依赖 `IMProvisioner` 接口；outbox 的端口与类型（`OutboxEntry`、状态常量、`OutboxRepository`）定义在 `internal/service/ports/outbox.go`，表模型与实现在 `internal/model/outbox.go`、`internal/repository/outbox`，domain 只保留用户、凭证、会话三个聚合的仓储。`cmd/cron` 使用 `NewCronApp` 精简装配（不构建 HTTP、令牌、限流组件），并以 Redis 分布式锁保证多实例下同一时刻只有一个补偿任务在运行。
+通用 `outbox_events` 已落地（000002）；后续可扩展 `topic`/`aggregate_id` 字段以承载更多 action，并计划用 `SELECT ... FOR UPDATE SKIP LOCKED` 批量取任务、超过阈值进死信状态并告警。worker 已完全独立：实现位于 `internal/job/im`（`Worker.Provision/SyncProfile/Settle/RunDue`），`Settle` 以 `(userID, action, cause)` 统一落定开通与资料同步任务，账号域只依赖 `IMProvisioner` 接口；goim 侧新增 `/user/update_user_info` 同步（admin token），头像仅当 `avatar_key` 本身是 http(s) URL 时才作为 faceURL 下发。outbox 的端口与类型（`OutboxEntry`、状态常量、`OutboxRepository`）定义在 `internal/service/ports/outbox.go`，表模型与实现在 `internal/model/outbox.go`、`internal/repository/outbox`，domain 只保留用户、凭证、会话三个聚合的仓储。`cmd/cron` 使用 `NewCronApp` 精简装配（不构建 HTTP、令牌、限流组件），并以 Redis 分布式锁保证多实例下同一时刻只有一个补偿任务在运行。
 
 升级路径：当出现跨团队消费、峰值 >1000 TPS 或需要多订阅方时，再把 outbox 投递到 Kafka；业务代码只需替换 dispatcher。
 
@@ -804,10 +804,10 @@ goim-business/
 ├── internal/
 │   ├── app/
 │   ├── config/
-│   ├── domain/{account,profile,device,file,clientconfig}/   # ⏳ 其他域
+│   ├── domain/{account,profile,device,file,clientconfig}/   # profile 并入 account（✅）；其余域 ⏳
 │   ├── handler/{account,profile,device,file,clientconfig,notification,admin,internal}/
 │   ├── middlewares/                # 现有目录；未来增加 adminauth.go、idempotency.go
-│   ├── service/{account,profile,device,file,clientconfig,notification,admin}/   # account 内含 im_outbox.go（✅）
+│   ├── service/{account,profile,device,file,clientconfig,notification,admin}/   # account 内含 im_outbox.go、profile.go（✅）
 │   ├── repository/{account,profile,device,file,config,notification,audit}/     # account 内含 outbox.go（✅）
 │   ├── client/{goim,storage}/      # ✅ goim HTTP；⏳ RustFS 预签名
 │   ├── job/{im,file_cleanup,scheduler}/  # im ✅；其余 ⏳
@@ -882,7 +882,7 @@ CREATE TABLE account_users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 ```
 
-> `id` 即业务 userID，未来注册 IM 时原样转字符串传给 goim `/user/user_register`，不设 `im_user_id`、不做映射。`avatar_key/bio` 当前只建表、无资料接口；`im_status/im_synced_at` 由 IM 开通流程写入。
+> `id` 即业务 userID，注册 IM 时原样转字符串传给 goim `/user/user_register`，不设 `im_user_id`、不做映射。`avatar_key/bio` 已由 `/profile` 接口读写；`im_status/im_synced_at` 由 IM 开通流程写入。
 
 ### 7.2 `account_credentials`（✅ 已实现）
 
@@ -1072,14 +1072,14 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 请求：`POST /im/token` 无请求体；平台取自 access token 的 claims，客户端不能改写。
 响应：`IMTokenResp` 为 `{ userId, token, expireTimeSeconds, apiBaseUrl, wsUrl, platformId }`，`IMStatusResp` 为 `{ userId, status, syncedAt }`；详见 §4.5。`userId` 同时就是 IM userID。
 
-### 8.3 资料 `/profile`（⏳ 规划中，未注册路由）
+### 8.3 资料 `/profile`（✅ 最小闭环）
 
 | 方法 | 路径 | 鉴权 | 说明 | 状态 |
 |---|---|---|---|---|
-| GET | `/profile/me` | 🔐 | 当前用户资料（头像返回预签名 GET URL） | ⏳ |
-| PUT | `/profile/me` | 🔐 | 更新昵称/头像 fileId/bio，同步 goim | ⏳ |
-| POST | `/profile/batch` | 🔐 | 批量取公开资料（昵称/头像） | ⏳ |
-| GET | `/profile/users/{userId}` | 🔐 | 单个公开资料 | ⏳ |
+| GET | `/profile/me` | 🔐 | 当前用户资料（返回 `nickname/avatarKey/bio`；预签名 URL 待文件域） | ✅ |
+| PUT | `/profile/me` | 🔐 | 更新昵称/头像 key/bio，同事务写入 `profile_sync` outbox 并同步 goim | ✅ |
+| POST | `/profile/batch` | 🔐 | 批量取公开资料（昵称/头像 key，最多 100 个） | ✅ |
+| GET | `/profile/users/{userId}` | 🔐 | 单个公开资料，不存在返回 1004 | ✅ |
 | PUT | `/profile/me/extended` | 🔐 | 扩展字段（地区/性别/签名/自定义 JSON） | ⏳ |
 
 ### 8.4 设备 `/devices`（⏳ 规划中，未注册路由）
@@ -1223,6 +1223,8 @@ client → POST /api/v1/account/register（X-Client-Platform 可选）
 注册成功且 IM 已配置 → POST /user/user_register（admin token；1102 用户已注册视为成功）
   成功 → im_status=1，记录 synced_at，outbox 标记 done
   失败 → im_status=2（不影响注册结果），outbox 标记 failed 并按 2^attempts 分钟退避（上限 1h）
+资料更新 → 同事务写 outbox_events(profile_sync) → POST /user/update_user_info（admin token，全量昵称/faceURL）
+  成功 → outbox 标记 done；失败 → outbox 标记 failed 并按退避重试（IM 未 Ready 时直接退避）
 cron 进程 → 每 im.outbox_scan_interval 扫描到期任务 → 重新调用 goim → 成功 done / 失败继续退避
 client → POST /im/token → LoginWithToken
   未就绪（im_status != 1）→ 9002，也可调用 POST /im/retry 手动重试开通
@@ -1244,14 +1246,17 @@ client → POST /api/v1/account/refresh {refreshToken}
     6. 签发新 access（新 sid）
 ```
 
-### 9.3 IM token 刷新（✅ 业务接口已实现；SDK TokenProvider 改造 ⏳）
+### 9.3 IM token 刷新（✅ 已实现：业务接口 + Web 客户端定时续期）
 
 ```
-SDK token 即将过期 → 回调宿主 → POST /im/token（业务 access）
+Web 客户端每 30s 检查一次：IM token 剩余 < 5 分钟 → POST /im/token（业务 access）
   → Redis 命中直接返回（写入时已扣除 10 分钟安全窗口）
   → 否则向 goim 换新并按剩余有效期回写缓存 → 返回
-宿主 → SDK UpdateToken / 重新 LoginWithToken
+宿主 → SDK Client.updateToken(token, expireTimeSeconds)
+业务 access 过期（1002/2004）→ axios 层单飞调用 /account/refresh 换新 access，随后重放原请求
 ```
+
+SDK 本身没有宿主 token 回调；续期由客户端定时器驱动（`goim-web-chat` 的 `startImTokenRenewal`），因此不涉及 TokenProvider 改造。
 
 ### 9.4 头像上传（⏳ 规划中）
 
@@ -1311,24 +1316,26 @@ POST /admin/announcements
 - **只做 A 档账号域**：不实现资料/设备/配置/文件，不注册任何 B/C 档路由，不做管理端。✅
 - 验收：多端登录（Web + 任一桌面形态）互不影响；refresh 轮换与重放检测有单测；连续失败触发锁定；错误码与响应格式统一；账号接口有最小 OpenAPI 契约。✅
 
-### M2 IM 对接闭环（🚧 进行中：后端接口已完成，Web 客户端改造 ⏳）
+### M2 IM 对接闭环（✅ 后端与 Web 客户端代码均已落地；端到端联调待环境）
 
 - goim 客户端（admin token 缓存、错误归一）；user provisioning（同步开通 + 手动重试）；`/im/token`；`/im/status`；`/im/retry`；平台 ID 约定。
   - goim 客户端底座 + 注册开通 + token 兑换（Redis 缓存、IP 限流、缓存 fail-open）：✅ 已实现。
   - outbox 补偿 ✅：注册事务内写通用 `outbox_events`，同步结果落定状态；worker 按 2^attempts 分钟退避（上限 1 小时）自动重试，`/im/retry` 仍可手动触发。
-- 同时改造 `goim-web-chat`：移除 `adminSecret`，改 `loginWithToken` + `TokenProvider`，`VITE_GOIM_PLATFORM_ID=5`。⏳
-- 验收：用业务账号在 Web 登录，能收发消息、拉历史；IM token 过期后自动刷新；前端产物中搜不到 admin secret。⏳（待客户端改造后验收）
+- `goim-web-chat` 已改造（commit `cf49b14`）：移除 adminSecret，业务账号登录/注册 → `POST /im/token` → `loginWithToken`，`VITE_GOIM_PLATFORM_ID=5`；账号未开通（9002）时自动 `/im/retry` 后再兑换；IM token 剩余不足 5 分钟时自动续期；业务 access 过期自动 refresh 并重放请求。✅
+- 代码层验收：`npm run build` 通过；产物中不存在 admin secret 值或相关环境变量，仅保留 SDK 可选的 `adminSecret` 空字段名（应用初始化从不赋值）。✅
+- 运行时验收 ⏳：本机无 Docker，goim 联调地址 `192.168.241.128:18880/50001` 当前不可达，待联调环境恢复后补测“业务账号登录 → 收发消息 → 拉历史 → token 自动续期”。
 
-### M3 资料 / 设备 / 客户端配置（⏳ 未开始）
+### M3 资料 / 设备 / 客户端配置（资料最小闭环 ✅；设备与客户端配置 ⏳）
 
-- `/profile`（最小）、`/devices`、`/client-config`（ETag/版本）、资料同步 goim。
-- 验收：改昵称/头像后另一客户端可见；配置版本递增、304 生效；设备列表可踢出。
+- `/profile`（最小）：✅ `GET/PUT /profile/me`、`POST /profile/batch`、`GET /profile/users/{userId}`；资料以 MySQL 为事实源，更新事务内写 `profile_sync` outbox，提交后即时同步 goim，失败按退避补偿；IM 账号未开通时由 worker 等待开通完成后再同步。头像当前只存 `avatar_key`，URL 仅当本身是 `http(s)` 地址时才作为 faceURL 下发。
+- `/devices`、`/client-config`（ETag/版本）：⏳ 未开始。
+- 验收：改昵称/头像后另一客户端可见 ⏳ 待联调环境；配置版本递增、304 生效、设备列表可踢出 ⏳ 未开始。
 
 ### M4 文件（仅头像）+ 首版发布门禁（⏳ 未开始）
 
 - RustFS 预签名、complete 校验、访问 URL、头像配额、孤儿清理。
 - 验收：头像全链路；超大/非法类型被拒；未 complete 的对象 24h 清理。
-- **首版门禁**：M0-M4 全部通过、Web 端完成 token 改造、压测与回滚演练通过后即可发布；B 档未实现不影响发布。当前 M2 进行中（后端已完成、Web 客户端改造 ⏳），M3-M4 未开始，尚不满足发布门禁。
+- **首版门禁**：M0-M4 全部通过、Web 端完成 token 改造、压测与回滚演练通过后即可发布；B 档未实现不影响发布。当前 M2 代码闭环完成（后端 + Web 客户端），仅差联调环境上的端到端验收；M3 仅资料最小闭环已实现，设备/客户端配置与 M4 未开始，尚不满足发布门禁。
 
 ### M5 上线加固（⏳ 未开始，与 M4 并行收尾）
 

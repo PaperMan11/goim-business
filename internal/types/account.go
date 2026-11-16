@@ -89,6 +89,34 @@ type IMStatusResp struct {
 	SyncedAt *time.Time `json:"syncedAt"`
 }
 
+// ProfileView 是当前用户的完整资料。
+type ProfileView struct {
+	UserID    string `json:"userId"`
+	LoginName string `json:"loginName"`
+	Nickname  string `json:"nickname"`
+	AvatarKey string `json:"avatarKey"`
+	Bio       string `json:"bio"`
+}
+
+// PublicProfileView 是他人可见的公开资料。
+type PublicProfileView struct {
+	UserID    string `json:"userId"`
+	Nickname  string `json:"nickname"`
+	AvatarKey string `json:"avatarKey"`
+}
+
+// UpdateProfileRequest 是更新资料请求；字段为 nil 表示不修改。
+type UpdateProfileRequest struct {
+	Nickname  *string `json:"nickname" binding:"omitempty,max=64"`
+	AvatarKey *string `json:"avatarKey" binding:"omitempty,max=255"`
+	Bio       *string `json:"bio" binding:"omitempty,max=255"`
+}
+
+// BatchProfilesRequest 是批量获取公开资料的请求。
+type BatchProfilesRequest struct {
+	UserIDs []string `json:"userIds" binding:"required,min=1,max=100,dive,required"`
+}
+
 // AuthResp 是注册/登录/刷新的响应。
 type AuthResp struct {
 	User             UserView  `json:"user"`

@@ -103,6 +103,22 @@ func (r *UserRepo) GetByID(ctx context.Context, id int64) (*domain.User, error) 
 	return userFromRecord(&record), nil
 }
 
+// GetByIDs 批量查询用户；不存在的 ID 直接跳过。
+func (r *UserRepo) GetByIDs(ctx context.Context, ids []int64) ([]*domain.User, error) {
+	if len(ids) == 0 {
+		return []*domain.User{}, nil
+	}
+	var records []model.User
+	if err := r.dbFrom(ctx).Where("id IN ?", ids).Find(&records).Error; err != nil {
+		return nil, mapErr(err)
+	}
+	users := make([]*domain.User, 0, len(records))
+	for i := range records {
+		users = append(users, userFromRecord(&records[i]))
+	}
+	return users, nil
+}
+
 // TouchLastLogin 更新最后登录时间。
 func (r *UserRepo) TouchLastLogin(ctx context.Context, id int64, at time.Time) error {
 	return mapErr(r.dbFrom(ctx).Model(&model.User{}).
@@ -116,6 +132,19 @@ func (r *UserRepo) UpdateIMStatus(ctx context.Context, userID int64, status int8
 		"im_status":    status,
 		"im_synced_at": syncedAt,
 		"updated_at":   at,
+	}
+	return mapErr(r.dbFrom(ctx).Model(&model.User{}).
+		Where("id = ?", userID).
+		Updates(updates).Error)
+}
+
+// UpdateProfile 覆盖写入用户资料；空字符串表示清空对应字段。
+func (r *UserRepo) UpdateProfile(ctx context.Context, userID int64, nickname, avatarKey, bio string, at time.Time) error {
+	updates := map[string]any{
+		"nickname":   nickname,
+		"avatar_key": avatarKey,
+		"bio":        bio,
+		"updated_at": at,
 	}
 	return mapErr(r.dbFrom(ctx).Model(&model.User{}).
 		Where("id = ?", userID).

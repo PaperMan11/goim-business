@@ -1,9 +1,11 @@
-// Package im 负责账号与 IM 侧的异步同步：账号开通、状态回写与 outbox 补偿。
+// Package im 负责账号与 IM 侧的异步同步：账号开通、资料同步、状态回写与 outbox 补偿。
 // 与账号域服务解耦，供 API（注册后的即时开通）与 cron 进程（后台补偿）共用。
 package im
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"time"
 
 	domain "goim-business/internal/domain/account"
@@ -12,6 +14,9 @@ import (
 	"goim-business/internal/pkg/text"
 	"goim-business/internal/service/ports"
 )
+
+// errProfileNotReady 表示 IM 账号尚未开通，资料同步需延后重试。
+var errProfileNotReady = errors.New("IM 账号尚未开通")
 
 const (
 	// maxBackoff 是补偿任务重试退避的上限。
@@ -79,30 +84,45 @@ func (w *Worker) Provision(ctx context.Context, user *domain.User) error {
 	return nil
 }
 
-// Settle 在注册的同步开通结束后落定唯一一条 provision_im 任务：
+// SyncProfile 把当前用户昵称与头像同步到 IM；失败只记录日志并返回错误，由调用方决定影响范围。
+func (w *Worker) SyncProfile(ctx context.Context, user *domain.User) error {
+	// 客户端断开不应导致已发出的同步请求被误判失败。
+	syncCtx := context.WithoutCancel(ctx)
+	avatarURL := ""
+	if strings.HasPrefix(user.AvatarKey, "http://") || strings.HasPrefix(user.AvatarKey, "https://") {
+		avatarURL = user.AvatarKey
+	}
+	if err := w.im.UpdateUserInfo(syncCtx, convert.ToString(user.ID), user.Nickname, avatarURL); err != nil {
+		w.log.Warnf("IM 资料同步失败: user_id=%d, err=%v", user.ID, err)
+		return err
+	}
+	return nil
+}
+
+// Settle 在同步调用结束后落定指定类型唯一一条 outbox 任务：
 // 成功标记完成，失败按退避策略安排重试。异步补偿由 RunDue 接管。
-func (w *Worker) Settle(ctx context.Context, userID int64, provisionErr error) {
+func (w *Worker) Settle(ctx context.Context, userID int64, action string, cause error) {
 	if w.outbox == nil {
 		return
 	}
-	entry, err := w.outbox.FindPending(ctx, userID, ports.OutboxActionProvisionIM)
+	entry, err := w.outbox.FindPending(ctx, userID, action)
 	if err != nil {
-		w.log.Errorf("查询 IM outbox 失败: user_id=%d, err=%v", userID, err)
+		w.log.Errorf("查询 IM outbox 失败: user_id=%d, action=%s, err=%v", userID, action, err)
 		return
 	}
 	if entry == nil {
 		return
 	}
-	if provisionErr == nil {
+	if cause == nil {
 		if err := w.outbox.MarkDone(ctx, entry.ID); err != nil {
 			w.log.Errorf("标记 IM outbox 完成失败: id=%d, user_id=%d, err=%v", entry.ID, userID, err)
 		}
 		return
 	}
-	w.retry(ctx, *entry, provisionErr)
+	w.retry(ctx, *entry, cause)
 }
 
-// RunDue 扫描并补偿一批到期的 IM 开通任务，返回本轮处理的条数。
+// RunDue 扫描并补偿一批到期的 IM outbox 任务，返回本轮处理的条数。
 // 单条失败只记日志，不中断整批；IM 未启用时直接返回 0。
 func (w *Worker) RunDue(ctx context.Context) int {
 	if w.im == nil || !w.im.Enabled() || w.outbox == nil {
@@ -131,12 +151,20 @@ func (w *Worker) RunDue(ctx context.Context) int {
 	return processed
 }
 
-// processEntry 处理单条任务：已 Ready 的用户跳过 goim 调用直接标记完成。
+// processEntry 按任务类型分发：provision_im 开通账号，profile_sync 同步资料。
 func (w *Worker) processEntry(ctx context.Context, entry ports.OutboxEntry) {
-	if entry.Action != ports.OutboxActionProvisionIM {
+	switch entry.Action {
+	case ports.OutboxActionProvisionIM:
+		w.processProvision(ctx, entry)
+	case ports.OutboxActionProfileSync:
+		w.processProfile(ctx, entry)
+	default:
 		w.log.Warnf("未知 IM outbox 任务: id=%d, action=%s", entry.ID, entry.Action)
-		return
 	}
+}
+
+// processProvision 处理开通任务：已 Ready 的用户跳过 goim 调用直接标记完成。
+func (w *Worker) processProvision(ctx context.Context, entry ports.OutboxEntry) {
 	// 状态回写不受优雅退出时的取消影响，保证已发出的开通请求有明确结论。
 	writeCtx := context.WithoutCancel(ctx)
 
@@ -154,6 +182,28 @@ func (w *Worker) processEntry(ctx context.Context, entry ports.OutboxEntry) {
 	}
 
 	if err := w.Provision(writeCtx, user); err != nil {
+		w.retry(writeCtx, entry, err)
+		return
+	}
+	if err := w.outbox.MarkDone(writeCtx, entry.ID); err != nil {
+		w.log.Errorf("标记 IM outbox 完成失败: id=%d, user_id=%d, err=%v", entry.ID, entry.UserID, err)
+	}
+}
+
+// processProfile 处理资料同步任务；IM 账号未开通时按退避重试，等待开通任务完成。
+func (w *Worker) processProfile(ctx context.Context, entry ports.OutboxEntry) {
+	writeCtx := context.WithoutCancel(ctx)
+
+	user, err := w.users.GetByID(writeCtx, entry.UserID)
+	if err != nil {
+		w.retry(writeCtx, entry, err)
+		return
+	}
+	if user.IMStatus != domain.IMStatusReady {
+		w.retry(writeCtx, entry, errProfileNotReady)
+		return
+	}
+	if err := w.SyncProfile(writeCtx, user); err != nil {
 		w.retry(writeCtx, entry, err)
 		return
 	}

@@ -158,6 +158,11 @@ func (c imClient) RegisterUser(ctx context.Context, userID, nickname string) err
 	return c.client.RegisterUser(ctx, goim.UserInfo{UserID: userID, Nickname: nickname})
 }
 
+// UpdateUserInfo 把昵称与头像同步到 IM。
+func (c imClient) UpdateUserInfo(ctx context.Context, userID, nickname, avatarURL string) error {
+	return c.client.UpdateUserInfo(ctx, goim.UserInfo{UserID: userID, Nickname: nickname, AvatarURL: avatarURL})
+}
+
 // UserToken 为指定用户与平台兑换 IM token。
 func (c imClient) UserToken(ctx context.Context, userID string, platformID int) (*ports.IMToken, error) {
 	tok, err := c.client.UserToken(ctx, userID, platformID)

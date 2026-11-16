@@ -15,6 +15,9 @@ const (
 // OutboxActionProvisionIM 是注册后开通 IM 账号的任务类型。
 const OutboxActionProvisionIM = "provision_im"
 
+// OutboxActionProfileSync 是用户资料变更后同步到 IM 的任务类型。
+const OutboxActionProfileSync = "profile_sync"
+
 // OutboxEntry 是一条待处理的 outbox 任务。
 type OutboxEntry struct {
 	ID          int64

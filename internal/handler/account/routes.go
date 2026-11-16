@@ -31,4 +31,12 @@ func InitRoutes(r *gin.RouterGroup, a *app.App) {
 	imRoute.POST("/token", limiter.IMToken(), IMToken(a))
 	imRoute.GET("/status", IMStatus(a))
 	imRoute.POST("/retry", limiter.IMToken(), IMRetry(a))
+
+	// 用户资料以 account_users 为事实源，单向同步到 goim 投影。
+	profileRoute := r.Group("/profile")
+	profileRoute.Use(authenticator.Middleware())
+	profileRoute.GET("/me", Profile(a))
+	profileRoute.PUT("/me", UpdateProfile(a))
+	profileRoute.POST("/batch", BatchProfiles(a))
+	profileRoute.GET("/users/:userId", PublicProfile(a))
 }

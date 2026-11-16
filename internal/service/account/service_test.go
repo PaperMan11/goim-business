@@ -411,6 +411,35 @@ func (f *fakeUsers) GetByID(_ context.Context, id int64) (*domain.User, error) {
 	return &clone, nil
 }
 
+func (f *fakeUsers) GetByIDs(_ context.Context, ids []int64) ([]*domain.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	users := make([]*domain.User, 0, len(ids))
+	for _, id := range ids {
+		user, ok := f.byID[id]
+		if !ok {
+			continue
+		}
+		clone := *user
+		users = append(users, &clone)
+	}
+	return users, nil
+}
+
+func (f *fakeUsers) UpdateProfile(_ context.Context, id int64, nickname, avatarKey, bio string, at time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	user, ok := f.byID[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	user.Nickname = nickname
+	user.AvatarKey = avatarKey
+	user.Bio = bio
+	user.UpdatedAt = at
+	return nil
+}
+
 func (f *fakeUsers) TouchLastLogin(_ context.Context, id int64, at time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -448,6 +477,12 @@ type fakeProvisioner struct {
 	lastNickname string
 	err          error
 
+	updateCalls        int
+	lastUpdateUserID   string
+	lastUpdateNickname string
+	lastUpdateAvatar   string
+	updateErr          error
+
 	token          *ports.IMToken
 	tokenErr       error
 	tokenCalls     int
@@ -481,6 +516,34 @@ func (f *fakeProvisioner) UserToken(_ context.Context, userID string, platformID
 	f.lastTokenUser = userID
 	f.lastTokenPlatf = platformID
 	return f.token, f.tokenErr
+}
+
+func (f *fakeProvisioner) UpdateUserInfo(_ context.Context, userID, nickname, avatarURL string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateCalls++
+	f.lastUpdateUserID = userID
+	f.lastUpdateNickname = nickname
+	f.lastUpdateAvatar = avatarURL
+	return f.updateErr
+}
+
+func (f *fakeProvisioner) setUpdateErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updateErr = err
+}
+
+func (f *fakeProvisioner) updateCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.updateCalls
+}
+
+func (f *fakeProvisioner) lastUpdate() (calls int, userID, nickname, avatar string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.updateCalls, f.lastUpdateUserID, f.lastUpdateNickname, f.lastUpdateAvatar
 }
 
 func (f *fakeProvisioner) setToken(token *ports.IMToken, err error) {

@@ -6,6 +6,7 @@ import (
 
 	domain "goim-business/internal/domain/account"
 	"goim-business/internal/pkg/errcode"
+	"goim-business/internal/service/ports"
 	"goim-business/internal/types"
 )
 
@@ -62,7 +63,7 @@ func (s *Service) Register(ctx context.Context, in types.RegisterRequest) (*type
 			return s.dbErr("注册写入凭证", err)
 		}
 		// 与用户、凭证、会话同事务写入：账号创建成功即保证补偿任务不会丢。
-		if err := s.enqueueIMOutbox(ctx, user.ID); err != nil {
+		if err := s.enqueueIMOutbox(ctx, user.ID, ports.OutboxActionProvisionIM); err != nil {
 			return s.dbErr("注册写入 IM outbox", err)
 		}
 		var createErr error
@@ -85,7 +86,7 @@ func (s *Service) Register(ctx context.Context, in types.RegisterRequest) (*type
 	if s.im != nil && s.im.Enabled() {
 		settleCtx := context.WithoutCancel(ctx)
 		provisionErr := s.provisionIM(settleCtx, user)
-		s.imSync.Settle(settleCtx, user.ID, provisionErr)
+		s.imSync.Settle(settleCtx, user.ID, ports.OutboxActionProvisionIM, provisionErr)
 	}
 	return s.authResp(user, pair), nil
 }
