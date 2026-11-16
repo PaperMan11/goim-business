@@ -76,5 +76,9 @@ func (s *Service) Register(ctx context.Context, in types.RegisterRequest) (*type
 	if err := s.activateSession(ctx, sess, kicked); err != nil {
 		return nil, err
 	}
+	// IM 开通失败不影响注册结果；未配置 IM 时跳过，用户保持 Pending。
+	if s.im != nil && s.im.Enabled() {
+		_ = s.provisionIM(ctx, user)
+	}
 	return s.authResp(user, pair), nil
 }

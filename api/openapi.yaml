@@ -3,7 +3,7 @@ info:
   title: goim-business API
   version: 1.0.0
   description: |
-    goim-business 账号域（M1）的最小 OpenAPI 契约，只描述当前已注册的 7 个接口。
+    goim-business 账号域与 IM 凭证的 OpenAPI 契约，只描述当前已注册的 10 个接口。
 
     **统一响应约定**：所有接口的 HTTP 状态码恒为 200，业务结果一律由响应体 `code` 判断：
     `0` 表示成功，非 `0` 为业务错误码，错误提示见 `msg`，`data` 可能为空或携带明细。
@@ -19,6 +19,8 @@ info:
 tags:
   - name: Account
     description: 账号注册、登录、令牌刷新、登出、会话管理与改密
+  - name: IM
+    description: IM token 兑换、开通状态查询与手动重试
 
 servers:
   - url: /api/v1
@@ -158,6 +160,54 @@ paths:
         '200':
           $ref: '#/components/responses/EmptyOK'
 
+  /im/token:
+    post:
+      tags: [IM]
+      operationId: exchangeIMToken
+      summary: 兑换 IM token
+      description: |
+        请求体为空，平台取自 access token 的 claims（客户端无法改写）。
+        IM 未启用或账号尚未开通完成返回 9002；平台非法返回 1001。
+        服务端按 (userId, platformId) 缓存 IM token，命中时直接返回；未命中时才向 IM 兑换。
+        受 IP 维度限流保护（默认 30 次/分钟），超限返回 1029。
+        错误码：1001 参数错误、1002 未认证或登录态已失效、1004 资源不存在、2003 账号已被冻结、
+        1029 请求过于频繁、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          $ref: '#/components/responses/IMTokenOK'
+
+  /im/status:
+    get:
+      tags: [IM]
+      operationId: getIMStatus
+      summary: 查询 IM 开通状态
+      description: |
+        返回当前账号的 IM 开通状态：0 待开通、1 已开通、2 失败；syncedAt 为最近一次开通成功时间。
+        错误码：1002 未认证或登录态已失效、1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          $ref: '#/components/responses/IMStatusOK'
+
+  /im/retry:
+    post:
+      tags: [IM]
+      operationId: retryIMProvision
+      summary: 重试 IM 账号开通
+      description: |
+        重新调用 IM 开通接口，然后返回与 /im/status 相同的结构；已开通的账号重复调用不会重复注册。
+        受 IP 维度限流保护（默认 30 次/分钟），超限返回 1029。
+        错误码：1002 未认证或登录态已失效、1004 资源不存在、1029 请求过于频繁、
+        9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          $ref: '#/components/responses/IMStatusOK'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -230,6 +280,34 @@ components:
           schema:
             oneOf:
               - $ref: '#/components/schemas/EmptyResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    IMTokenOK:
+      description: |
+        成功时 data 为 IMTokenResponse（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/IMTokenResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    IMStatusOK:
+      description: |
+        成功时 data 为 IMStatusResponse（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/IMStatusResult'
               - $ref: '#/components/schemas/ErrorResponse'
 
   schemas:
@@ -489,6 +567,91 @@ components:
           type: object
           nullable: true
           description: 成功时为 null 或被省略。
+
+    IMTokenResponse:
+      type: object
+      description: IM token 兑换成功后的 data。
+      required: [userId, token, expireTimeSeconds, apiBaseUrl, wsUrl, platformId]
+      properties:
+        userId:
+          type: string
+          description: 用户 ID（十进制数字字符串），同时就是 IM userID。
+          example: "123456789"
+        token:
+          type: string
+          description: IM 侧签发的 user token。
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.im-token.example"
+        expireTimeSeconds:
+          type: integer
+          format: int64
+          description: token 剩余有效期（秒），服务端已扣除缓存安全窗口。
+          example: 86400
+        apiBaseUrl:
+          type: string
+          description: 客户端访问 IM HTTP 接口的根地址。
+          example: "https://im.example.com/api/v1"
+        wsUrl:
+          type: string
+          description: 客户端连接 IM WebSocket 的地址；未配置时为空字符串。
+          example: "wss://im.example.com/ws"
+        platformId:
+          type: integer
+          format: int32
+          description: 平台 ID：iOS=1、Android=2、Windows=3、macOS=4、Web=5、HarmonyOS=11。
+          enum: [1, 2, 3, 4, 5, 11]
+          example: 5
+
+    IMStatusResponse:
+      type: object
+      description: IM 账号开通状态。
+      required: [userId, status, syncedAt]
+      properties:
+        userId:
+          type: string
+          description: 用户 ID（十进制数字字符串），同时就是 IM userID。
+          example: "123456789"
+        status:
+          type: integer
+          format: int32
+          description: 开通状态：0 待开通、1 已开通、2 失败。
+          enum: [0, 1, 2]
+          example: 1
+        syncedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 最近一次开通成功的时间；待开通或失败时为 null。
+          example: "2026-11-16T10:00:00+08:00"
+
+    IMTokenResult:
+      type: object
+      description: IM token 兑换的成功响应体。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/IMTokenResponse'
+
+    IMStatusResult:
+      type: object
+      description: IM 开通状态的成功响应体。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/IMStatusResponse'
 
     ErrorResponse:
       type: object

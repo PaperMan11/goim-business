@@ -32,6 +32,16 @@ func UserIDFrom(c *gin.Context) int64 {
 	return 0
 }
 
+// PlatformIDFrom 返回 access token 中的平台 ID；未认证时为 0。
+func PlatformIDFrom(c *gin.Context) int8 {
+	if v, ok := c.Get(CtxPlatform); ok {
+		if n, ok := v.(int8); ok {
+			return n
+		}
+	}
+	return 0
+}
+
 // SessionIDFrom 返回当前会话 ID；未认证时为 0。
 func SessionIDFrom(c *gin.Context) int64 {
 	if v, ok := c.Get(CtxSessionID); ok {

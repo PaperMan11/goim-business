@@ -11,6 +11,7 @@ type UserRepository interface {
 	GetByLoginName(ctx context.Context, loginName string) (*User, error)
 	GetByID(ctx context.Context, id int64) (*User, error)
 	TouchLastLogin(ctx context.Context, id int64, at time.Time) error
+	UpdateIMStatus(ctx context.Context, userID int64, status int8, syncedAt *time.Time, at time.Time) error
 }
 
 // CredentialRepository 是密码凭证仓储端口。

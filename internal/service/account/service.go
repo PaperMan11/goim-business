@@ -19,6 +19,8 @@ type Config struct {
 	MaxSessionsPerPlatform int
 	LoginLockThreshold     int64
 	LoginLockWindow        time.Duration
+	IMAPIBaseURL           string
+	IMWSURL                string
 }
 
 // Service 是账号域服务。
@@ -29,6 +31,8 @@ type Service struct {
 	tx       ports.TxManager
 	state    ports.SessionStateCache
 	throttle ports.LoginThrottle
+	im       ports.IMClient
+	imTokens ports.IMTokenCache
 	tokens   *token.Issuer
 	cfg      Config
 	log      logger.Logger
@@ -44,6 +48,8 @@ func NewService(
 	tx ports.TxManager,
 	state ports.SessionStateCache,
 	throttle ports.LoginThrottle,
+	im ports.IMClient,
+	imTokens ports.IMTokenCache,
 	tokens *token.Issuer,
 	cfg Config,
 	log logger.Logger,
@@ -55,6 +61,8 @@ func NewService(
 		tx:       tx,
 		state:    state,
 		throttle: throttle,
+		im:       im,
+		imTokens: imTokens,
 		tokens:   tokens,
 		cfg:      cfg,
 		log:      log,

@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ type Config struct {
 	Auth      AuthConfig      `mapstructure:"auth"`
 	RateLimit RateLimitConfig `mapstructure:"ratelimit"`
 	CORS      CORSConfig      `mapstructure:"cors"`
+	IM        IMConfig        `mapstructure:"im"`
 }
 
 type ServerConfig struct {
@@ -73,13 +75,25 @@ type AuthConfig struct {
 }
 
 type RateLimitConfig struct {
-	Enabled         bool  `mapstructure:"enabled"`
-	LoginPerMinute  int64 `mapstructure:"login_per_minute"`
-	RegisterPerHour int64 `mapstructure:"register_per_hour"`
+	Enabled          bool  `mapstructure:"enabled"`
+	LoginPerMinute   int64 `mapstructure:"login_per_minute"`
+	RegisterPerHour  int64 `mapstructure:"register_per_hour"`
+	IMTokenPerMinute int64 `mapstructure:"im_token_per_minute"`
 }
 
 type CORSConfig struct {
 	AllowedOrigins []string `mapstructure:"allowed_origins"`
+}
+
+// IMConfig 是 goim im-api 客户端配置；base_url 为空表示未接入 IM。
+type IMConfig struct {
+	BaseURL           string        `mapstructure:"base_url"`
+	APIBaseURL        string        `mapstructure:"api_base_url"`
+	WSURL             string        `mapstructure:"ws_url"`
+	AdminUserID       string        `mapstructure:"admin_user_id"`
+	AdminSecret       string        `mapstructure:"admin_secret"`
+	Timeout           time.Duration `mapstructure:"timeout"`
+	TokenRefreshAhead time.Duration `mapstructure:"token_refresh_ahead"`
 }
 
 // Load 按 env 加载配置：base.yaml → {env}.yaml → GOIM_BIZ_* 环境变量。
@@ -199,6 +213,18 @@ func (c *Config) Validate() error {
 	}
 	if c.Auth.LoginLockThreshold <= 0 || c.Auth.LoginLockWindow <= 0 {
 		return fmt.Errorf("auth.login_lock_threshold/login_lock_window 必须大于 0")
+	}
+	if c.IM.BaseURL != "" {
+		u, err := url.Parse(c.IM.BaseURL)
+		if err != nil {
+			return fmt.Errorf("im.base_url 非法: %w", err)
+		}
+		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("im.base_url 必须是带 host 的 http/https 地址: %s", c.IM.BaseURL)
+		}
+		if c.IM.AdminUserID == "" || c.IM.AdminSecret == "" {
+			return fmt.Errorf("im.base_url 已配置时 im.admin_user_id/admin_secret 必填（secret 请通过环境变量 GOIM_BIZ_IM__ADMIN_SECRET 注入）")
+		}
 	}
 	return nil
 }

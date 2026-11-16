@@ -35,6 +35,8 @@ func userRecord(user *domain.User) *model.User {
 		AvatarKey:   user.AvatarKey,
 		Bio:         user.Bio,
 		Status:      user.Status,
+		IMStatus:    user.IMStatus,
+		IMSyncedAt:  user.IMSyncedAt,
 		LastLoginAt: user.LastLoginAt,
 		CreatedAt:   user.CreatedAt,
 		UpdatedAt:   user.UpdatedAt,
@@ -49,6 +51,8 @@ func userFromRecord(record *model.User) *domain.User {
 		AvatarKey:   record.AvatarKey,
 		Bio:         record.Bio,
 		Status:      record.Status,
+		IMStatus:    record.IMStatus,
+		IMSyncedAt:  record.IMSyncedAt,
 		LastLoginAt: record.LastLoginAt,
 		CreatedAt:   record.CreatedAt,
 		UpdatedAt:   record.UpdatedAt,
@@ -104,4 +108,16 @@ func (r *UserRepo) TouchLastLogin(ctx context.Context, id int64, at time.Time) e
 	return mapErr(r.dbFrom(ctx).Model(&model.User{}).
 		Where("id = ?", id).
 		Updates(map[string]any{"last_login_at": at, "updated_at": at}).Error)
+}
+
+// UpdateIMStatus 更新 IM 开通状态与同步时间；syncedAt 为 nil 时写入 NULL。
+func (r *UserRepo) UpdateIMStatus(ctx context.Context, userID int64, status int8, syncedAt *time.Time, at time.Time) error {
+	updates := map[string]any{
+		"im_status":    status,
+		"im_synced_at": syncedAt,
+		"updated_at":   at,
+	}
+	return mapErr(r.dbFrom(ctx).Model(&model.User{}).
+		Where("id = ?", userID).
+		Updates(updates).Error)
 }

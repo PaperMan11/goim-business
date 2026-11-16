@@ -72,6 +72,23 @@ type TokenView struct {
 	ExpiresIn   int64  `json:"expiresIn"`
 }
 
+// IMTokenResp 是 IM token 兑换的响应。
+type IMTokenResp struct {
+	UserID            string `json:"userId"`
+	Token             string `json:"token"`
+	ExpireTimeSeconds int64  `json:"expireTimeSeconds"`
+	APIBaseURL        string `json:"apiBaseUrl"`
+	WSURL             string `json:"wsUrl"`
+	PlatformID        int8   `json:"platformId"`
+}
+
+// IMStatusResp 是 IM 账号开通状态的响应。
+type IMStatusResp struct {
+	UserID   string     `json:"userId"`
+	Status   int8       `json:"status"`
+	SyncedAt *time.Time `json:"syncedAt"`
+}
+
 // AuthResp 是注册/登录/刷新的响应。
 type AuthResp struct {
 	User             UserView  `json:"user"`

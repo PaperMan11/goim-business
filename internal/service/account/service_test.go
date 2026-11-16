@@ -15,6 +15,7 @@ import (
 	domain "goim-business/internal/domain/account"
 	"goim-business/internal/pkg/errcode"
 	"goim-business/internal/pkg/token"
+	"goim-business/internal/service/ports"
 	"goim-business/internal/types"
 )
 
@@ -40,11 +41,13 @@ func (c *testClock) Now() time.Time {
 }
 
 type testEnv struct {
-	svc      *Service
-	users    *fakeUsers
-	creds    *fakeCreds
-	sessions *fakeSessions
-	cache    *fakeCache
+	svc         *Service
+	users       *fakeUsers
+	creds       *fakeCreds
+	sessions    *fakeSessions
+	cache       *fakeCache
+	provisioner *fakeProvisioner
+	imTokens    *fakeIMTokenCache
 }
 
 func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
@@ -54,6 +57,8 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 	creds := newFakeCreds()
 	sessions := newFakeSessions()
 	cache := newFakeCache()
+	provisioner := newFakeProvisioner(false)
+	imTokens := newFakeIMTokenCache()
 
 	cfg := Config{
 		AccessTTL:              15 * time.Minute,
@@ -68,12 +73,12 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 	}
 
 	issuer := token.NewIssuer("test-secret-0123456789", "goim-business", "goim-business-api", cfg.AccessTTL)
-	svc := NewService(users, creds, sessions, fakeTx{}, cache, cache, issuer, cfg, zap.NewNop().Sugar())
+	svc := NewService(users, creds, sessions, fakeTx{}, cache, cache, provisioner, imTokens, issuer, cfg, zap.NewNop().Sugar())
 
 	clock := &testClock{base: time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)}
 	svc.now = clock.Now
 
-	return &testEnv{svc: svc, users: users, creds: creds, sessions: sessions, cache: cache}
+	return &testEnv{svc: svc, users: users, creds: creds, sessions: sessions, cache: cache, provisioner: provisioner, imTokens: imTokens}
 }
 
 func requireCode(t *testing.T, err error, code int) {
@@ -400,6 +405,153 @@ func (f *fakeUsers) TouchLastLogin(_ context.Context, id int64, at time.Time) er
 	}
 	user.LastLoginAt = &at
 	return nil
+}
+
+func (f *fakeUsers) UpdateIMStatus(_ context.Context, id int64, status int8, syncedAt *time.Time, at time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	user, ok := f.byID[id]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	user.IMStatus = status
+	if syncedAt == nil {
+		user.IMSyncedAt = nil
+	} else {
+		value := *syncedAt
+		user.IMSyncedAt = &value
+	}
+	user.UpdatedAt = at
+	return nil
+}
+
+type fakeProvisioner struct {
+	mu           sync.Mutex
+	enabled      bool
+	calls        int
+	lastUserID   string
+	lastNickname string
+	err          error
+
+	token          *ports.IMToken
+	tokenErr       error
+	tokenCalls     int
+	lastTokenUser  string
+	lastTokenPlatf int
+}
+
+func newFakeProvisioner(enabled bool) *fakeProvisioner {
+	return &fakeProvisioner{enabled: enabled}
+}
+
+func (f *fakeProvisioner) Enabled() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.enabled
+}
+
+func (f *fakeProvisioner) RegisterUser(_ context.Context, userID, nickname string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	f.lastUserID = userID
+	f.lastNickname = nickname
+	return f.err
+}
+
+func (f *fakeProvisioner) UserToken(_ context.Context, userID string, platformID int) (*ports.IMToken, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tokenCalls++
+	f.lastTokenUser = userID
+	f.lastTokenPlatf = platformID
+	return f.token, f.tokenErr
+}
+
+func (f *fakeProvisioner) setToken(token *ports.IMToken, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.token = token
+	f.tokenErr = err
+}
+
+func (f *fakeProvisioner) tokenCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.tokenCalls
+}
+
+func (f *fakeProvisioner) setEnabled(enabled bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.enabled = enabled
+}
+
+func (f *fakeProvisioner) setErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
+func (f *fakeProvisioner) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func (f *fakeProvisioner) last() (calls int, userID, nickname string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls, f.lastUserID, f.lastNickname
+}
+
+type fakeIMTokenEntry struct {
+	token    string
+	expireAt time.Time
+	ttl      time.Duration
+}
+
+type fakeIMTokenCache struct {
+	mu      sync.Mutex
+	entries map[string]fakeIMTokenEntry
+}
+
+func newFakeIMTokenCache() *fakeIMTokenCache {
+	return &fakeIMTokenCache{entries: make(map[string]fakeIMTokenEntry)}
+}
+
+func imTokenKey(userID string, platform int8) string {
+	return fmt.Sprintf("%s:%d", userID, platform)
+}
+
+func (f *fakeIMTokenCache) Get(_ context.Context, userID string, platform int8) (string, time.Time, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry, ok := f.entries[imTokenKey(userID, platform)]
+	if !ok {
+		return "", time.Time{}, false, nil
+	}
+	return entry.token, entry.expireAt, true, nil
+}
+
+func (f *fakeIMTokenCache) Set(_ context.Context, userID string, platform int8, token string, expireAt time.Time, ttl time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.entries[imTokenKey(userID, platform)] = fakeIMTokenEntry{token: token, expireAt: expireAt, ttl: ttl}
+	return nil
+}
+
+func (f *fakeIMTokenCache) seed(userID string, platform int8, token string, expireAt time.Time) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.entries[imTokenKey(userID, platform)] = fakeIMTokenEntry{token: token, expireAt: expireAt}
+}
+
+func (f *fakeIMTokenCache) entry(userID string, platform int8) (fakeIMTokenEntry, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry, ok := f.entries[imTokenKey(userID, platform)]
+	return entry, ok
 }
 
 type fakeCreds struct {

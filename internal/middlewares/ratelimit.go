@@ -35,6 +35,11 @@ func (r *RateLimit) Register() gin.HandlerFunc {
 	return r.apply("register", r.cfg.RegisterPerHour, time.Hour)
 }
 
+// IMToken IM token 兑换/重试限流：默认 30 次/分钟/IP。
+func (r *RateLimit) IMToken() gin.HandlerFunc {
+	return r.apply("im_token", r.cfg.IMTokenPerMinute, time.Minute)
+}
+
 func (r *RateLimit) apply(scope string, limit int64, window time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !r.cfg.Enabled || limit <= 0 {

@@ -45,6 +45,20 @@ ratelimit:
   enabled: true
   login_per_minute: 5
   register_per_hour: 3
+  # IM token 兑换/重试的 IP 维度限流；<=0 表示关闭。
+  im_token_per_minute: 30
 
 cors:
   allowed_origins: ["*"]
+
+# goim im-api 客户端；base_url 为空表示未接入 IM（服务仍可启动）。
+im:
+  base_url: ""
+  # 下发给客户端的 IM HTTP / WS 地址；api_base_url 为空时回退为 base_url + /api/v1。
+  api_base_url: ""
+  ws_url: ""
+  admin_user_id: ""
+  # 只能通过环境变量 GOIM_BIZ_IM__ADMIN_SECRET 注入，禁止写入仓库。
+  admin_secret: ""
+  timeout: 3s
+  token_refresh_ahead: 60s

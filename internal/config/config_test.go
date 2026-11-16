@@ -38,3 +38,44 @@ func TestValidateRejectsMissingRequired(t *testing.T) {
 	}
 	require.Error(t, cfg.Validate())
 }
+
+func validConfig() *Config {
+	return &Config{
+		Env: "dev",
+		Server: ServerConfig{
+			HTTPAddr:     "0.0.0.0:8080",
+			ProbeAddr:    "0.0.0.0:8081",
+			MetricsAddr:  "0.0.0.0:9091",
+			MaxBodyBytes: 1,
+		},
+		MySQL: MySQLConfig{DSN: "root:pass@tcp(127.0.0.1:3306)/goim_business"},
+		Redis: RedisConfig{Addr: "127.0.0.1:6379", KeyPrefix: "goim:business"},
+		Auth: AuthConfig{
+			JWTSecret:              "0123456789abcdef",
+			Issuer:                 "goim-business",
+			Audience:               "goim-business-api",
+			AccessTTL:              time.Minute,
+			RefreshTTL:             time.Hour,
+			MaxSessionsPerUser:     5,
+			MaxSessionsPerPlatform: 3,
+			LoginLockThreshold:     10,
+			LoginLockWindow:        time.Minute,
+		},
+	}
+}
+
+func TestValidateIMBaseURL(t *testing.T) {
+	cfg := validConfig()
+	cfg.IM = IMConfig{
+		BaseURL:     "im.example.com",
+		AdminUserID: "admin",
+		AdminSecret: "secret",
+	}
+	require.ErrorContains(t, cfg.Validate(), "im.base_url")
+}
+
+func TestValidateIMMissingAdminCredentials(t *testing.T) {
+	cfg := validConfig()
+	cfg.IM = IMConfig{BaseURL: "http://im.example.com"}
+	require.ErrorContains(t, cfg.Validate(), "im.admin_user_id/admin_secret")
+}

@@ -27,7 +27,7 @@ func TestOpenAPIAccountContract(t *testing.T) {
 	require.Equal(t, "/api/v1", mustMap(t, servers[0])["url"])
 
 	paths := mustMap(t, spec["paths"])
-	require.Len(t, paths, 7, "只允许描述已实现的 7 个账号接口")
+	require.Len(t, paths, 10, "只允许描述已实现的 7 个账号接口与 3 个 IM 接口")
 	for _, path := range []string{
 		"/account/register",
 		"/account/login",
@@ -36,6 +36,9 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		"/account/sessions",
 		"/account/sessions/revoke",
 		"/account/password",
+		"/im/token",
+		"/im/status",
+		"/im/retry",
 	} {
 		require.Contains(t, paths, path)
 	}
@@ -54,6 +57,8 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		"TokenView",
 		"SessionView",
 		"SessionViewList",
+		"IMTokenResponse",
+		"IMStatusResponse",
 		"ErrorResponse",
 	} {
 		require.Contains(t, schemas, name)
@@ -71,6 +76,9 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		"/account/sessions":        "get",
 		"/account/sessions/revoke": "post",
 		"/account/password":        "put",
+		"/im/token":                "post",
+		"/im/status":               "get",
+		"/im/retry":                "post",
 	}
 	for path, method := range authed {
 		op := mustMap(t, mustMap(t, paths[path])[method])

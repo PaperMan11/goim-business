@@ -12,6 +12,13 @@ const (
 	StatusDeleted  int8 = 4
 )
 
+// IM 账号开通状态。
+const (
+	IMStatusPending int8 = 0
+	IMStatusReady   int8 = 1
+	IMStatusFailed  int8 = 2
+)
+
 // User 是业务账号；ID 是数据库自增主键，对 IM 下发时转为字符串。
 type User struct {
 	ID          int64
@@ -20,6 +27,8 @@ type User struct {
 	AvatarKey   string
 	Bio         string
 	Status      int8
+	IMStatus    int8
+	IMSyncedAt  *time.Time
 	LastLoginAt *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

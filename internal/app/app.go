@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -13,12 +14,14 @@ import (
 	"gorm.io/gorm"
 
 	"goim-business/internal/cache"
+	"goim-business/internal/client/goim"
 	"goim-business/internal/config"
 	"goim-business/internal/pkg/ratelimit"
 	"goim-business/internal/pkg/token"
 	"goim-business/internal/repository"
 	accountrepo "goim-business/internal/repository/account"
 	"goim-business/internal/service/account"
+	"goim-business/internal/service/ports"
 )
 
 // App 是进程级应用容器：持有配置、基础设施连接与业务服务。
@@ -41,8 +44,10 @@ type App struct {
 
 	// 基础设施。
 	SessionCache *cache.SessionCache
+	IMTokenCache *cache.IMTokenCache
 	TokenIssuer  *token.Issuer
 	RateLimiter  *ratelimit.Limiter
+	IM           *goim.Client
 
 	// 业务服务。
 	AccountService *account.Service
@@ -82,6 +87,7 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		Credentials:  accountrepo.NewCredentialRepo(db),
 		Sessions:     accountrepo.NewSessionRepo(db),
 		SessionCache: cache.NewSessionCache(rdb, keyPrefix),
+		IMTokenCache: cache.NewIMTokenCache(rdb, keyPrefix),
 		TokenIssuer: token.NewIssuer(
 			cfg.Auth.JWTSecret,
 			cfg.Auth.Issuer,
@@ -89,6 +95,22 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 			cfg.Auth.AccessTTL,
 		),
 		RateLimiter: ratelimit.New(rdb, keyPrefix),
+		IM: goim.New(goim.Config{
+			BaseURL:           cfg.IM.BaseURL,
+			AdminUserID:       cfg.IM.AdminUserID,
+			AdminSecret:       cfg.IM.AdminSecret,
+			Timeout:           cfg.IM.Timeout,
+			TokenRefreshAhead: cfg.IM.TokenRefreshAhead,
+		}),
+	}
+	if !a.IM.Enabled() {
+		log.Warn("IM 未配置，注册跳过开通")
+	}
+
+	// api_base_url 未显式配置时，按 im-api 的统一前缀从 base_url 推导。
+	imAPIBaseURL := strings.TrimSpace(cfg.IM.APIBaseURL)
+	if imAPIBaseURL == "" && cfg.IM.BaseURL != "" {
+		imAPIBaseURL = strings.TrimRight(cfg.IM.BaseURL, "/") + "/api/v1"
 	}
 
 	a.AccountService = account.NewService(
@@ -98,6 +120,8 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		a.Tx,
 		a.SessionCache,
 		a.SessionCache,
+		imClient{client: a.IM},
+		a.IMTokenCache,
 		a.TokenIssuer,
 		account.Config{
 			AccessTTL:              cfg.Auth.AccessTTL,
@@ -106,10 +130,34 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 			MaxSessionsPerPlatform: cfg.Auth.MaxSessionsPerPlatform,
 			LoginLockThreshold:     cfg.Auth.LoginLockThreshold,
 			LoginLockWindow:        cfg.Auth.LoginLockWindow,
+			IMAPIBaseURL:           imAPIBaseURL,
+			IMWSURL:                cfg.IM.WSURL,
 		},
 		log.Sugar(),
 	)
 	return a, nil
+}
+
+// imClient 把 goim 客户端适配为账号域的 IM 端口。
+type imClient struct {
+	client *goim.Client
+}
+
+// Enabled 表示 IM 是否已配置。
+func (c imClient) Enabled() bool { return c.client.Enabled() }
+
+// RegisterUser 在 IM 侧开通用户。
+func (c imClient) RegisterUser(ctx context.Context, userID, nickname string) error {
+	return c.client.RegisterUser(ctx, goim.UserInfo{UserID: userID, Nickname: nickname})
+}
+
+// UserToken 为指定用户与平台兑换 IM token。
+func (c imClient) UserToken(ctx context.Context, userID string, platformID int) (*ports.IMToken, error) {
+	tok, err := c.client.UserToken(ctx, userID, platformID)
+	if err != nil {
+		return nil, err
+	}
+	return &ports.IMToken{Value: tok.Value, ExpireAt: tok.ExpireAt}, nil
 }
 
 // Close 释放连接资源。
