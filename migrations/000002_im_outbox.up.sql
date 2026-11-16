@@ -6,7 +6,7 @@
 CREATE TABLE account_im_outbox (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '任务 ID',
   user_id       BIGINT UNSIGNED NOT NULL COMMENT '逻辑关联 account_users.id（无数据库外键）',
-  action        VARCHAR(32)  NOT NULL COMMENT '任务类型：本轮仅 provision_im，为后续资料同步预留',
+  action        VARCHAR(32)  NOT NULL COMMENT '任务类型：provision_im',
   payload       TEXT         NOT NULL DEFAULT ('') COMMENT '任务参数（JSON 字符串），本轮为空',
   status        TINYINT      NOT NULL DEFAULT 0 COMMENT '任务状态：0待处理 1已完成 2失败待重试',
   attempts      INT          NOT NULL DEFAULT 0 COMMENT '已失败次数；成功后保留最近一次失败次数',
