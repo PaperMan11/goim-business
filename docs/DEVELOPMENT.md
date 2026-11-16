@@ -31,8 +31,8 @@
 | 鉴权 | ✅ 已实现 | HS256 access JWT + Redis 会话活跃标记 + refresh 轮换/重放检测 |
 | 限流 | ✅ 已实现 | 登录/注册按 IP 固定窗口限流，失败关闭；登录失败按账号锁定 |
 | 可观测 | ✅ 已实现 | zap JSON、request_id、Recovery、Prometheus 指标、`/healthz`、`/readyz` |
-| 交付 | ✅ 已实现 | Makefile、Dockerfile、compose、GitHub Actions、migrations + `cmd/migrate` |
-| IM 凭证兑换 / 账号开通 | ✅ 已实现 | `internal/client/goim`、`internal/handler/account`（IM handler）、`internal/cache/im_token_cache.go`；outbox 仍 ⏳ |
+| 交付 | ✅ 已实现 | Makefile、Dockerfile、compose、GitHub Actions、migrations + `cmd/{api,migrate,cron}` |
+| IM 凭证兑换 / 账号开通 | ✅ 已实现 | `internal/client/goim`、`internal/handler/account`（IM handler）、`internal/cache/im_token_cache.go`；IM 开通 outbox 补偿 ✅ |
 | 用户资料 | ⏳ 规划中 | 表字段已预留（`avatar_key`/`bio`），无 `/profile` 路由与同步逻辑 |
 | 设备 | ⏳ 规划中 | 无 `devices` 表与路由 |
 | 客户端配置 | ⏳ 规划中 | 无配置表、无 `/client-config` 路由 |
@@ -49,7 +49,7 @@
 |---|---|---|---|
 | 账号与鉴权 | 自建 access JWT（默认 15 分钟）+ 不透明 refresh token（默认 30 天，轮换 + 重放检测） | goim 只有 24h access token，无 refresh；终端必须有自己的登录态 | ✅ 已实现 |
 | IM 凭证兑换 | `POST /api/v1/im/token`，服务端缓存 admin token 并向 goim 换取 user token | 不解决这一条，前端就只能继续内置 adminSecret，属于阻塞项 | ✅ 已实现（Web 客户端改造 ⏳） |
-| IM 账号开通 | 注册后同步调用 goim `/user/user_register`，失败可通过 `/im/retry` 重试 | 没有 IM user 投影，资料/会话/推送都查不到人 | ✅ 已实现（outbox 与资料变更同步 ⏳） |
+| IM 账号开通 | 注册后同步调用 goim `/user/user_register`，失败进入 outbox 补偿，也可通过 `/im/retry` 手动重试 | 没有 IM user 投影，资料/会话/推送都查不到人 | ✅ 已实现（outbox ✅；资料变更同步 ⏳） |
 | 用户资料（最小） | 昵称、头像 fileId、bio；MySQL 为事实源，goim 为投影 | 聊天界面必须显示昵称/头像 | ⏳ 规划中（字段已预留） |
 | 设备注册 | deviceID、平台、版本、最后活跃；支撑多端会话与踢出 | 多端登录是 Web + 桌面的现实场景 | ⏳ 规划中（会话层面已记录 deviceID） |
 | 客户端配置 | IM 地址、平台映射、上传限制、功能开关；版本 + ETag | 客户端换环境/开关不能靠重新发版 | ⏳ 规划中 |
@@ -118,7 +118,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 
 ### 2.3 业务后端必须补充的“现状未覆盖职责”
 
-1. **IM 账号开通器（User Provisioning）**（✅）：注册后同步 goim user，失败可重试，状态可查询。**业务 userID 即 IM userID**，开通时原样写入，不生成第二套 ID。当前已写入 `account_users.im_status/im_synced_at`；outbox 与注销同步仍 ⏳。
+1. **IM 账号开通器（User Provisioning）**（✅）：注册后同步 goim user，失败可重试，状态可查询。**业务 userID 即 IM userID**，开通时原样写入，不生成第二套 ID。当前已写入 `account_users.im_status/im_synced_at`；注册事务内同时写 `account_im_outbox`，独立 `cmd/cron` 进程按退避策略补偿（✅）；注销同步仍 ⏳。
 2. **IM Token Broker**（✅）：admin token 缓存、按 `(userID, platformID)` 复用 user token、IP 限频。
 3. **设备注册表**（⏳）：deviceID、平台、版本、推送 token、最后活跃时间；支撑多端踢出与推送。当前会话表已记录 `device_id`，但没有独立设备表。
 4. **业务文件资产**（⏳）：首版只做头像；后续扩展反馈截图、后台素材的对象 key、配额、审计；与聊天附件分桶/分前缀。
@@ -175,10 +175,10 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
                        MySQL │  Redis          ▼
                           │   │            auth/user/msg/...
                           │   └── RustFS（预签名，业务桶）
-                          └── outbox worker（同进程）
+                          └── cron 进程（独立部署）
 ```
 
-- **单进程、单镜像**：API + 内置 worker 同二进制，靠配置开关拆分部署。首版不引入服务网格、不引入独立队列。当前只有 API，worker 为规划项 ⏳。
+- **API 与 cron 分进程、同镜像**：`cmd/api` 只提供 HTTP 服务，`cmd/cron` 只运行定时任务（当前为 IM 开通 outbox 补偿）；两者共用同一镜像与配置，部署时用不同 command 启动，可各自独立扩缩容。cron 使用 `robfig/cron/v3` 的 `@every` 调度，并用 `internal/pkg/lock` 的 Redis 分布式锁保证同一时刻只有一个实例执行；`im.base_url` 为空时 cron 打印日志后正常退出；其余 worker 为规划项 ⏳。
 - **路径隔离**：业务命名空间与 SDK 占用路径不重叠，因此 `BaseURL` 仍可保持 `/api/v1`，无需改 SDK 常量。
 - **无状态**：会话状态在 MySQL + Redis，实例可水平扩容。
 
@@ -205,7 +205,7 @@ gin.New()
 
 ### 3.3 当前运行时拓扑（✅ 已实现）
 
-单个 `cmd/api` 进程启动三个 HTTP Server，由 `internal/pkg/run.Group` 统一管理生命周期：
+单个 `cmd/api` 进程启动三个 HTTP Server，由 `internal/pkg/run.Group` 统一管理生命周期（IM outbox 补偿已移出 API，改由独立 `cmd/cron` 进程运行）：
 
 | Server | 地址配置 | 默认端口 | 用途 |
 |---|---|---|---|
@@ -231,7 +231,7 @@ gin.New()
 | MySQL | MySQL 8.x（本地 compose 使用 **mysql:8.4**），`utf8mb4_0900_ai_ci`，InnoDB | 事务、唯一约束满足账号域需求 |
 | Redis | Redis 7.x（compose 使用 **redis:7-alpine**），`go-redis/v9` **v9.7.0** | 会话活跃标记、限流、登录失败计数 |
 
-**分层形态**：模块化单体（modular monolith）。当前是“领域模型 + 应用服务 + 仓储实现”的轻量分层：`internal/domain/account` 定义实体/值对象/仓储端口，`internal/service/ports` 定义缓存与事务端口，`internal/repository/account` 提供 gorm 实现。没有 `internal/usecase`，也不采用 DDD 四层重型模板。
+**分层形态**：模块化单体（modular monolith）。当前是“领域模型 + 应用服务 + 仓储实现”的轻量分层：`internal/domain/account` 定义实体/值对象/仓储端口（含 outbox 仓储端口），`internal/service/ports` 定义缓存与事务端口，`internal/repository/account` 提供 gorm 实现。没有 `internal/usecase`，也不采用 DDD 四层重型模板。
 
 ### 4.2 配置管理（✅ 已实现，多环境 staging 仅保留支持）
 
@@ -255,6 +255,7 @@ gin.New()
 | `auth` | `jwt_secret`、`issuer`、`audience`、`access_ttl`、`refresh_ttl`、`max_sessions_per_user`、`max_sessions_per_platform`、`login_lock_threshold`、`login_lock_window` | 默认值见下 |
 | `ratelimit` | `enabled`、`login_per_minute`、`register_per_hour` | 仅登录/注册 IP 限流 |
 | `cors` | `allowed_origins` | 列表，`*` 表示回显任意 Origin |
+| `im` | `base_url`、`api_base_url`、`ws_url`、`admin_user_id`、`admin_secret`、`timeout`、`token_refresh_ahead`、`outbox_scan_interval`、`outbox_batch_size` | `base_url` 为空表示未接入 IM；启用时 outbox 扫描间隔与批量条数必须大于 0，`admin_secret` 仅环境变量注入 |
 
 `etc/base.yaml` 关键默认值（原文一致）：
 
@@ -301,13 +302,13 @@ cors:
 - `mysql.dsn` 必填；`redis.addr`、`redis.key_prefix` 必填。
 - `auth.jwt_secret` 长度 ≥ 16；`issuer/audience` 非空；`refresh_ttl > access_ttl`；`max_sessions_per_platform <= max_sessions_per_user`；`login_lock_threshold/login_lock_window > 0`。
 
-后续规划（⏳）：`im`、`storage`、`features` 等配置段尚未进入结构体；基于 `app_configs` 表 + Redis 的业务可变配置也未实现。密钥类（`mysql.dsn`、`redis.password`、`auth.jwt_secret`、未来的 `im.admin_secret`、对象存储 AK/SK）始终只允许环境变量/K8s Secret，仓库中留空。
+后续规划（⏳）：`storage`、`features` 等配置段尚未进入结构体；基于 `app_configs` 表 + Redis 的业务可变配置也未实现。密钥类（`mysql.dsn`、`redis.password`、`auth.jwt_secret`、`im.admin_secret`、对象存储 AK/SK）始终只允许环境变量/K8s Secret，仓库中留空。
 
 ### 4.3 依赖注入与项目分层（✅ 已实现）
 
 **结论：手写构造函数注入（`internal/app/app.go` 的 `NewApp`），不引入 `uber/fx` 或 `google/wire`。**
 
-`App` 作为组合根持有配置、logger、`*gorm.DB`、`*sql.DB`、Redis client、仓储、`TxManager`、`SessionCache`、`TokenIssuer`、`RateLimiter` 与 `AccountService`；`cmd/api` 负责加载配置、构造 `App`、启动 Server，`App.Close()` 释放 MySQL/Redis。
+`App` 作为组合根持有配置、logger、`*gorm.DB`、`*sql.DB`、Redis client、仓储、`TxManager`、`SessionCache`、`TokenIssuer`、`RateLimiter` 与 `AccountService`；`cmd/api` 负责加载配置、构造 `App`、启动 Server，`cmd/cron` 使用精简的 `NewCronApp`（仅 MySQL/Redis/goim/IMWorker），按 `robfig/cron/v3` 调度并用 Redis 分布式锁互斥，`App.Close()` 释放 MySQL/Redis。
 
 分层规则（可作为 code review checklist）：
 
@@ -316,7 +317,7 @@ cors:
 3. `domain` 定义实体、值对象、领域策略与仓储端口；`service/ports` 定义缓存/事务等应用端口；实现在 `repository`。
 4. `repository` 只做持久化；错误统一映射为领域错误（`ErrNotFound`/`ErrDuplicate`）。
 5. 跨层使用 `internal/types` 的请求/响应契约与 `internal/domain` 的领域对象；禁止把 gorm model 直接序列化给前端。
-6. 未来的 `client`（goim/RustFS）尚未创建（⏳）。
+6. 外部系统适配统一放在 `client`（goim 已实现，RustFS 尚未创建 ⏳）。
 
 ### 4.4 数据库迁移与 gorm 实践（✅ 已实现）
 
@@ -573,11 +574,11 @@ services:
 
 **构建（Makefile）**：
 
-- `make build` = `build-api` + `build-migrate`，产出 `bin/api` 与 `bin/migrate`；在 Windows 下自动追加 `.exe`（`bin/api.exe`、`bin/migrate.exe`）。
-- 两个二进制均使用 `CGO_ENABLED=0`、`-trimpath`、`-ldflags "-s -w"`；`api` 额外注入 `-X main.version=$(VERSION)`。
-- 其他目标：`tidy`、`test`（`go test ./...`）、`vet`（`go vet ./...`）、`run`、`migrate-up`、`migrate-down`、`compose-up`、`compose-down`、`image`。
+- `make build` = `build-api` + `build-migrate` + `build-cron`，产出 `bin/api`、`bin/migrate`、`bin/cron`；在 Windows 下自动追加 `.exe`。
+- 三个二进制均使用 `CGO_ENABLED=0`、`-trimpath`、`-ldflags "-s -w"`；`api` 与 `cron` 额外注入 `-X main.version=$(VERSION)`。
+- 其他目标：`tidy`、`test`（`go test ./...`）、`vet`（`go vet ./...`）、`run`、`run-cron`、`migrate-up`、`migrate-down`、`compose-up`、`compose-down`、`image`。
 
-**Dockerfile（✅）**：`golang:1.24-alpine` 构建，产出 `/out/api` 与 `/out/migrate`；运行阶段基于 `gcr.io/distroless/static-debian12:nonroot`，复制 `etc/` 到 `/app/etc` 并设 `GOIM_BIZ_CONFIG_DIR=/app/etc`，非 root 运行，暴露 8080/8081/9091，入口 `/app/api`。
+**Dockerfile（✅）**：`golang:1.24-alpine` 构建，产出 `/out/api`、`/out/migrate`、`/out/cron`；运行阶段基于 `gcr.io/distroless/static-debian12:nonroot`，复制 `etc/` 到 `/app/etc` 并设 `GOIM_BIZ_CONFIG_DIR=/app/etc`，非 root 运行，暴露 8080/8081/9091，入口 `/app/api`。cron 进程复用同一镜像，部署时覆盖 command 为 `/app/cron`。
 
 **CI（`.github/workflows/ci.yml`，✅）**：在 push 到 main/master 与 PR 时触发，使用 Go 1.24，依次执行 `go mod download`、`go build ./...`、`go vet ./...`、`go test -race ./...`。
 
@@ -621,9 +622,9 @@ services:
 
 规则：`route` 用 `c.FullPath()`，404 归为 `unmatched`；禁止把 userID/deviceID/IP 放进标签；Histogram 使用默认桶。Grafana 看板与告警规则尚未落地（⏳）。
 
-### 4.14 消息队列 / 异步任务的必要性判断（⏳ 规划中，未实现）
+### 4.14 消息队列 / 异步任务的必要性判断（✅ IM 开通补偿已实现；通用事件表 ⏳）
 
-**结论：首版不引入 Kafka；用 MySQL 事务性 Outbox + 同进程 worker。**
+**结论：首版不引入 Kafka；用 MySQL 事务性 Outbox + 独立 cron 进程补偿。**
 
 判断依据：
 
@@ -631,7 +632,7 @@ services:
 - goim 已有 Kafka，但那是消息扇出通道，业务服务接入会引入消费组、offset、运维与重复消费治理，收益不足。
 - Redis Stream/asynq 也可行，但关键链路（账号创建 → IM 开通）需要“与业务事务同生共死”，MySQL outbox 最稳。
 
-目标表结构（⏳ 未创建；主键沿用当前 BIGINT 约定）：
+通用事件表目标结构（⏳ 未创建；本轮先落地账号域专用表）：
 
 ```sql
 CREATE TABLE outbox_events (
@@ -648,7 +649,11 @@ CREATE TABLE outbox_events (
 );
 ```
 
-worker 计划用 `SELECT ... FOR UPDATE SKIP LOCKED` 批量取任务，指数退避（1m/5m/30m/2h/6h，上限 8 次），超过阈值进死信状态并告警。worker 与 API 同二进制，通过配置开关启用。当前 `cmd/api` 没有 worker。
+当前已落地的账号域实现：迁移 `migrations/000002_im_outbox` 创建 `account_im_outbox`（`user_id/action/payload/status/attempts/next_retry_at/last_error`）；注册事务内写入 `provision_im`，同步开通成功标记 `status=1`，失败标记 `status=2` 并按 `next_retry_at = now + 2^attempts 分钟` 退避（上限 1 小时，attempts 从 1 起算）。`cmd/cron` 通过 `internal/cron` 的 `Scheduler` 注册任务，底层使用 `robfig/cron/v3`；IM 开通任务的表达式为 `@every im.outbox_scan_interval`（默认 60s），每轮先抢名为 `im_outbox` 的 Redis 锁（TTL 5 分钟，抢不到说明其他实例在跑，直接跳过），再扫描一批（`im.outbox_batch_size`，默认 20）`next_retry_at <= now` 的记录；已 Ready 的用户直接标记完成，不再调用 goim。
+
+新增定时任务只需实现 `cron.Job`（`Name` / `Spec` / `Timeout` / `Run`）并在 `cmd/cron` 注册；锁键自动为 `{redis.key_prefix}:{env}:cron:{name}`，不同任务使用不同锁，不会相互阻塞。`Timeout` 必须小于锁 TTL（当前 5 分钟）。
+
+通用 `outbox_events` 仍为规划（⏳）：计划用 `SELECT ... FOR UPDATE SKIP LOCKED` 批量取任务，指数退避（1m/5m/30m/2h/6h，上限 8 次），超过阈值进死信状态并告警。worker 已完全独立：实现位于 `internal/job/im`（`Worker.Provision/Settle/RunDue`），账号域只依赖 `IMProvisioner` 接口；outbox 的端口与类型（`OutboxEntry`、状态常量、`IMOutboxRepository`）下沉到 `internal/domain/account`，`service/ports` 只保留缓存、限流、事务与外部客户端等基础设施端口。`cmd/cron` 使用 `NewCronApp` 精简装配（不构建 HTTP、令牌、限流组件），并以 Redis 分布式锁保证多实例下同一时刻只有一个补偿任务在运行。
 
 升级路径：当出现跨团队消费、峰值 >1000 TPS 或需要多订阅方时，再把 outbox 投递到 Kafka；业务代码只需替换 dispatcher。
 
@@ -704,7 +709,8 @@ goim-business/
 │   ├── config/
 │   │   ├── config.go               # 配置结构体、加载、强校验
 │   │   └── config_test.go
-│   ├── domain/account/             # 实体、值对象、策略、错误、仓储端口
+│   ├── cron/scheduler.go           # 定时任务注册：@every 调度 + 按任务名分布式锁
+│   ├── domain/account/             # 实体、值对象、策略、错误、仓储端口（outbox 端口在 repository.go）
 │   │   ├── user.go
 │   │   ├── credential.go
 │   │   ├── session.go
@@ -727,6 +733,7 @@ goim-business/
 │   │   ├── ratelimit.go            # 登录/注册 IP 限流
 │   │   ├── recovery.go             # panic 捕获，堆栈截断 15 行
 │   │   └── requestid.go            # X-Request-ID / operationID / UUIDv7
+│   ├── job/im/                     # ✅ IM 开通与 outbox 补偿 worker
 │   ├── model/account.go            # gorm 持久化记录（account_* 表）
 │   ├── pkg/                        # 无业务语义基础设施
 │   │   ├── convert/                # 类型转换
@@ -734,6 +741,8 @@ goim-business/
 │   │   ├── hashx/                  # SHA-256 等
 │   │   ├── httpx/                  # BindJSON、X-Client-Platform 解析
 │   │   ├── idgen/                  # UUIDv7
+│   │   ├── lock/                   # 分布式锁接口
+│   │   │   └── redis/              # Redis 锁实现（带 TTL 与重试策略）
 │   │   ├── logger/                 # zap 构造与 Logger 接口
 │   │   ├── password/               # argon2id
 │   │   ├── randx/                  # 安全随机数
@@ -760,7 +769,7 @@ goim-business/
 └── .env.example
 ```
 
-> 注意：仓库中不存在 `configs/`、`internal/usecase`、`internal/middleware`（实际目录名是 `internal/middlewares`）、`internal/client`、`internal/job`、`test/integration`。这些属于后续蓝图（见 §5.3）。
+> 注意：仓库中不存在 `configs/`、`internal/usecase`、`internal/middleware`（实际目录名是 `internal/middlewares`）、`internal/client`、`test/integration`。这些属于后续蓝图（见 §5.3）。
 
 ### 5.2 一次完整请求的中间件处理链（✅）
 
@@ -784,7 +793,7 @@ goim-business/
 
 ```
 goim-business/
-├── cmd/{api,migrate}/
+├── cmd/{api,migrate,cron}/         # cron 为定时任务进程，与 API 分开部署
 ├── etc/{base,dev,staging,prod}.yaml
 ├── api/openapi.yaml                # ✅ 账号域契约事实源
 ├── migrations/
@@ -794,10 +803,10 @@ goim-business/
 │   ├── domain/{account,profile,device,file,clientconfig}/   # ⏳ 其他域
 │   ├── handler/{account,profile,device,file,clientconfig,notification,admin,internal}/
 │   ├── middlewares/                # 现有目录；未来增加 adminauth.go、idempotency.go
-│   ├── service/{account,profile,device,file,clientconfig,notification,admin,outbox}/
-│   ├── repository/{account,profile,device,file,config,notification,audit,outbox}/
-│   ├── client/{goim,storage}/      # ⏳ goim HTTP / RustFS 预签名
-│   ├── job/{outbox_worker,file_cleanup,scheduler}/  # ⏳
+│   ├── service/{account,profile,device,file,clientconfig,notification,admin}/   # account 内含 im_outbox.go（✅）
+│   ├── repository/{account,profile,device,file,config,notification,audit}/     # account 内含 outbox.go（✅）
+│   ├── client/{goim,storage}/      # ✅ goim HTTP；⏳ RustFS 预签名
+│   ├── job/{im,file_cleanup,scheduler}/  # im ✅；其余 ⏳
 │   ├── model/、types/、pkg/
 ├── deploy/{compose.dev.yaml,k8s/}   # ⏳ k8s
 ├── test/{integration,e2e}/          # ⏳
@@ -1001,7 +1010,7 @@ CREATE TABLE audit_logs (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 ```
 
-`outbox_events` 见 §4.14（⏳）。管理员角色未来用 `admin_users(user_id, role, status)` 单表，权限点后续再拆（⏳）。
+IM 开通补偿使用 `account_im_outbox`（见 §4.14，✅）；通用 `outbox_events` 仍 ⏳。管理员角色未来用 `admin_users(user_id, role, status)` 单表，权限点后续再拆（⏳）。
 
 ---
 
@@ -1187,7 +1196,7 @@ CREATE TABLE audit_logs (
 
 ## 9. 关键流程
 
-### 9.1 注册（✅ 已实现）与 IM 开通（✅ 已实现；outbox ⏳）
+### 9.1 注册（✅ 已实现）与 IM 开通（✅ 已实现，含 outbox 补偿）
 
 当前实际流程：
 
@@ -1198,23 +1207,24 @@ client → POST /api/v1/account/register（X-Client-Platform 可选）
   service:
     2. 校验登录名/密码/昵称/deviceId
     3. argon2id 计算密码哈希
-    4. 事务：INSERT account_users → INSERT account_credentials → 创建会话（签发 access/refresh）
+    4. 事务：INSERT account_users → INSERT account_credentials → INSERT account_im_outbox(provision_im) → 创建会话（签发 access/refresh）
     5. 会话上限检查（踢出旧会话）
     6. 写 Redis sess:active:{sid}
   response: {code:0,data:{user,token,refreshToken,...,sessionId,platform}}
 ```
 
-当前 IM 开通为同步调用（outbox 异步化仍 ⏳）：
+当前 IM 开通：注册事务提交后仍同步调用一次 goim，同时由 outbox 兜底：
 
 ```
-注册成功且 IM 已配置 → POST /user/user_register（admin token）
-  成功 → im_status=1，记录 synced_at
-  失败 → im_status=2（不影响注册结果），日志告警
+注册成功且 IM 已配置 → POST /user/user_register（admin token；1102 用户已注册视为成功）
+  成功 → im_status=1，记录 synced_at，outbox 标记 done
+  失败 → im_status=2（不影响注册结果），outbox 标记 failed 并按 2^attempts 分钟退避（上限 1h）
+cron 进程 → 每 im.outbox_scan_interval 扫描到期任务 → 重新调用 goim → 成功 done / 失败继续退避
 client → POST /im/token → LoginWithToken
-  未就绪（im_status != 1）→ 9002，可调用 POST /im/retry 手动重试开通
+  未就绪（im_status != 1）→ 9002，也可调用 POST /im/retry 手动重试开通
 ```
 
-同步调用避免为单次远程调用引入 outbox 复杂度；goim 抖动只影响 IM 开通，不影响账号注册。
+同步调用保证正常路径立即 Ready；outbox 保证 goim 抖动或响应丢失时不丢开通，goim 抖动不影响账号注册。
 
 ### 9.2 令牌刷新（✅ 已实现）
 
@@ -1301,7 +1311,7 @@ POST /admin/announcements
 
 - goim 客户端（admin token 缓存、错误归一）；user provisioning（同步开通 + 手动重试）；`/im/token`；`/im/status`；`/im/retry`；平台 ID 约定。
   - goim 客户端底座 + 注册开通 + token 兑换（Redis 缓存、IP 限流、缓存 fail-open）：✅ 已实现。
-  - outbox 异步化仍 ⏳；当前注册后同步开通，失败写 `im_status=2`，可调用 `/im/retry` 重试。
+  - outbox 补偿 ✅：注册事务内写 `account_im_outbox`，同步结果落定状态；worker 按 2^attempts 分钟退避（上限 1 小时）自动重试，`/im/retry` 仍可手动触发。
 - 同时改造 `goim-web-chat`：移除 `adminSecret`，改 `loginWithToken` + `TokenProvider`，`VITE_GOIM_PLATFORM_ID=5`。⏳
 - 验收：用业务账号在 Web 登录，能收发消息、拉历史；IM token 过期后自动刷新；前端产物中搜不到 admin secret。⏳（待客户端改造后验收）
 
@@ -1382,7 +1392,8 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 - [x] ✅ 登录/注册限流可配置，限流实现已落地（防刷用例已补：`internal/middlewares/ratelimit_test.go`）。
 - [x] ✅ M2：`/im/token` 有 Redis token 缓存（按 userID+platform、TTL 扣 10 分钟）、IP 限频、依赖失败降级；`/im/status`、`/im/retry` 已注册。
 - [ ] ⏳ M2+：Web 聊天室移除 adminSecret，平台 ID 改为 5，登录走业务 token。
-- [ ] ⏳ M2+：outbox worker 可重试、可观测、积压有告警。
+- [x] ✅ M2：IM 开通 outbox 由独立 `cmd/cron` 进程（`robfig/cron/v3` 调度）周期扫描，失败按 2^attempts 分钟退避（上限 1 小时）；Redis 锁保证多实例互斥。
+- [ ] ⏳ M2+：outbox 积压指标与告警。
 - [x] ✅ 镜像可构建；迁移入口已提供（`bin/migrate up|down|version`）。
 - [ ] ⏳ 迁移 Job 与发布顺序写入 runbook。
 - [ ] ⏳ 后续域（通知/管理端/会话扩展/归档/推送偏好/举报）只保留契约，不注册路由。
@@ -1398,8 +1409,8 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 2. **账号域纵切（✅ 已完成）**：`account_users` / `account_credentials` / `account_sessions` 迁移 → 仓储 → 注册 → 登录 → 签发 access/refresh → 刷新轮换 → 登出/踢出 → 改密。
 3. **安全与多端（✅ 已完成）**：argon2id、refresh 哈希与重放检测、Redis 活跃会话、每用户/每平台会话上限、登录/注册限流、登录失败锁定。
 4. **验收（✅ 已完成）**：`go test ./...` 全绿；空库迁移成功；curl 跑通注册→登录→刷新→登出；多端会话互不影响；日志无敏感字段。
-5. **M2 IM 对接（🚧 进行中）**：goim 客户端、注册同步开通与手动重试、`/im/token`（Redis 缓存 + IP 限流）、`/im/status`、`/im/retry` 已完成；Web 客户端 `adminSecret` 改造仍 ⏳。
+5. **M2 IM 对接（🚧 进行中）**：goim 客户端、注册同步开通与手动重试、IM 开通 outbox 与后台补偿、`/im/token`（Redis 缓存 + IP 限流）、`/im/status`、`/im/retry` 已完成；Web 客户端 `adminSecret` 改造仍 ⏳。
 
-未包含（⏳ 后续 M2+）：资料/设备/配置/文件域、B/C 档路由、管理端、OpenAPI 全量契约（当前仅账号域与 IM 域最小契约）、outbox、RustFS/推送。
+未包含（⏳ 后续 M2+）：资料/设备/配置/文件域、B/C 档路由、管理端、OpenAPI 全量契约（当前仅账号域与 IM 域最小契约）、RustFS/推送。
 
 代码不自动提交，提交时机与粒度由用户决定。
