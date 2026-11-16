@@ -246,6 +246,32 @@ func TestRegisterUserReturnsAPIError(t *testing.T) {
 	require.Equal(t, http.StatusOK, apiErr.HTTPStatus)
 }
 
+func TestRegisterUserIdempotentWhenUserAlreadyExists(t *testing.T) {
+	rec := new(callRecord)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case apiPrefix + "/auth/get_admin_token":
+			rec.recordAdmin()
+			writeResponse(w, 0, "ok", map[string]any{"token": "admin-token", "expireTimeSeconds": 300})
+		case apiPrefix + "/user/user_register":
+			var body registerRequest
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			rec.recordRegister(r, body)
+			// IM 已创建成功但响应丢失后的重试会命中“用户已注册”。
+			writeResponse(w, 1102, "用户已注册", nil)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(Config{BaseURL: srv.URL, AdminUserID: "admin", AdminSecret: "secret"})
+	require.NoError(t, c.RegisterUser(context.Background(), UserInfo{UserID: "1"}))
+
+	_, registerCalls, _ := rec.counts()
+	require.Equal(t, 1, registerCalls)
+}
+
 func TestRegisterUserRetriesOnceAfterPermissionError(t *testing.T) {
 	rec := new(callRecord)
 	var lastToken atomic.Value

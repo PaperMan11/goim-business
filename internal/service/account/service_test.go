@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	domain "goim-business/internal/domain/account"
+	imjob "goim-business/internal/job/im"
 	"goim-business/internal/pkg/errcode"
 	"goim-business/internal/pkg/token"
 	"goim-business/internal/service/ports"
@@ -48,6 +49,7 @@ type testEnv struct {
 	cache       *fakeCache
 	provisioner *fakeProvisioner
 	imTokens    *fakeIMTokenCache
+	outbox      *fakeOutbox
 }
 
 func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
@@ -59,6 +61,7 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 	cache := newFakeCache()
 	provisioner := newFakeProvisioner(false)
 	imTokens := newFakeIMTokenCache()
+	outbox := newFakeOutbox()
 
 	cfg := Config{
 		AccessTTL:              15 * time.Minute,
@@ -67,18 +70,29 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 		MaxSessionsPerPlatform: 3,
 		LoginLockThreshold:     10,
 		LoginLockWindow:        15 * time.Minute,
+		IMOutboxBatchSize:      20,
 	}
 	if mutate != nil {
 		mutate(&cfg)
 	}
 
 	issuer := token.NewIssuer("test-secret-0123456789", "goim-business", "goim-business-api", cfg.AccessTTL)
-	svc := NewService(users, creds, sessions, fakeTx{}, cache, cache, provisioner, imTokens, issuer, cfg, zap.NewNop().Sugar())
-
 	clock := &testClock{base: time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)}
+	imSync := imjob.NewWorker(users, provisioner, outbox, cfg.IMOutboxBatchSize, clock.Now, zap.NewNop().Sugar())
+	svc := NewService(users, creds, sessions, fakeTx{}, cache, cache, provisioner, imTokens, outbox, imSync, issuer, cfg, zap.NewNop().Sugar())
+
 	svc.now = clock.Now
 
-	return &testEnv{svc: svc, users: users, creds: creds, sessions: sessions, cache: cache, provisioner: provisioner, imTokens: imTokens}
+	return &testEnv{
+		svc:         svc,
+		users:       users,
+		creds:       creds,
+		sessions:    sessions,
+		cache:       cache,
+		provisioner: provisioner,
+		imTokens:    imTokens,
+		outbox:      outbox,
+	}
 }
 
 func requireCode(t *testing.T, err error, code int) {

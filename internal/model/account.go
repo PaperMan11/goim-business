@@ -65,3 +65,19 @@ type Session struct {
 }
 
 func (Session) TableName() string { return "account_sessions" }
+
+// IMOutbox 是 IM 侧的补偿任务（事务性 outbox），与账号业务数据同事务写入。
+type IMOutbox struct {
+	ID          int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	UserID      int64     `gorm:"column:user_id"`
+	Action      string    `gorm:"column:action;size:32"`
+	Payload     string    `gorm:"column:payload"`
+	Status      int8      `gorm:"column:status"`
+	Attempts    int       `gorm:"column:attempts"`
+	NextRetryAt time.Time `gorm:"column:next_retry_at"`
+	LastError   string    `gorm:"column:last_error;size:512"`
+	CreatedAt   time.Time `gorm:"column:created_at"`
+	UpdatedAt   time.Time `gorm:"column:updated_at"`
+}
+
+func (IMOutbox) TableName() string { return "account_im_outbox" }

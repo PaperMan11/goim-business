@@ -94,6 +94,10 @@ type IMConfig struct {
 	AdminSecret       string        `mapstructure:"admin_secret"`
 	Timeout           time.Duration `mapstructure:"timeout"`
 	TokenRefreshAhead time.Duration `mapstructure:"token_refresh_ahead"`
+	// OutboxScanInterval 是 IM 开通补偿 worker 的扫描间隔。
+	OutboxScanInterval time.Duration `mapstructure:"outbox_scan_interval"`
+	// OutboxBatchSize 是单次扫描的最大任务条数。
+	OutboxBatchSize int `mapstructure:"outbox_batch_size"`
 }
 
 // Load 按 env 加载配置：base.yaml → {env}.yaml → GOIM_BIZ_* 环境变量。
@@ -224,6 +228,12 @@ func (c *Config) Validate() error {
 		}
 		if c.IM.AdminUserID == "" || c.IM.AdminSecret == "" {
 			return fmt.Errorf("im.base_url 已配置时 im.admin_user_id/admin_secret 必填（secret 请通过环境变量 GOIM_BIZ_IM__ADMIN_SECRET 注入）")
+		}
+		if c.IM.OutboxScanInterval <= 0 {
+			return fmt.Errorf("im.outbox_scan_interval 必须大于 0")
+		}
+		if c.IM.OutboxBatchSize <= 0 {
+			return fmt.Errorf("im.outbox_batch_size 必须大于 0")
 		}
 	}
 	return nil

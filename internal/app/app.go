@@ -16,7 +16,9 @@ import (
 	"goim-business/internal/cache"
 	"goim-business/internal/client/goim"
 	"goim-business/internal/config"
+	imjob "goim-business/internal/job/im"
 	"goim-business/internal/pkg/ratelimit"
+	"goim-business/internal/pkg/timex"
 	"goim-business/internal/pkg/token"
 	"goim-business/internal/repository"
 	accountrepo "goim-business/internal/repository/account"
@@ -41,6 +43,7 @@ type App struct {
 	Users       *accountrepo.UserRepo
 	Credentials *accountrepo.CredentialRepo
 	Sessions    *accountrepo.SessionRepo
+	IMOutbox    *accountrepo.OutboxRepo
 
 	// 基础设施。
 	SessionCache *cache.SessionCache
@@ -86,6 +89,7 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		Users:        accountrepo.NewUserRepo(db),
 		Credentials:  accountrepo.NewCredentialRepo(db),
 		Sessions:     accountrepo.NewSessionRepo(db),
+		IMOutbox:     accountrepo.NewOutboxRepo(db),
 		SessionCache: cache.NewSessionCache(rdb, keyPrefix),
 		IMTokenCache: cache.NewIMTokenCache(rdb, keyPrefix),
 		TokenIssuer: token.NewIssuer(
@@ -122,6 +126,8 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		a.SessionCache,
 		imClient{client: a.IM},
 		a.IMTokenCache,
+		a.IMOutbox,
+		imjob.NewWorker(a.Users, imClient{client: a.IM}, a.IMOutbox, cfg.IM.OutboxBatchSize, timex.Now, log.Sugar()),
 		a.TokenIssuer,
 		account.Config{
 			AccessTTL:              cfg.Auth.AccessTTL,
@@ -132,6 +138,7 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 			LoginLockWindow:        cfg.Auth.LoginLockWindow,
 			IMAPIBaseURL:           imAPIBaseURL,
 			IMWSURL:                cfg.IM.WSURL,
+			IMOutboxBatchSize:      cfg.IM.OutboxBatchSize,
 		},
 		log.Sugar(),
 	)

@@ -2,6 +2,7 @@
 package account
 
 import (
+	"context"
 	"time"
 
 	domain "goim-business/internal/domain/account"
@@ -21,6 +22,15 @@ type Config struct {
 	LoginLockWindow        time.Duration
 	IMAPIBaseURL           string
 	IMWSURL                string
+	// IMOutboxBatchSize 是单次扫描 outbox 的最大条数。
+	IMOutboxBatchSize int
+}
+
+// IMProvisioner 抽象 IM 开通与 outbox 补偿；实现位于 internal/job/im，账号域只依赖该接口。
+type IMProvisioner interface {
+	Provision(ctx context.Context, user *domain.User) error
+	Settle(ctx context.Context, userID int64, provisionErr error)
+	RunDue(ctx context.Context) int
 }
 
 // Service 是账号域服务。
@@ -33,6 +43,8 @@ type Service struct {
 	throttle ports.LoginThrottle
 	im       ports.IMClient
 	imTokens ports.IMTokenCache
+	outbox   domain.IMOutboxRepository
+	imSync   IMProvisioner
 	tokens   *token.Issuer
 	cfg      Config
 	log      logger.Logger
@@ -50,6 +62,8 @@ func NewService(
 	throttle ports.LoginThrottle,
 	im ports.IMClient,
 	imTokens ports.IMTokenCache,
+	outbox domain.IMOutboxRepository,
+	imSync IMProvisioner,
 	tokens *token.Issuer,
 	cfg Config,
 	log logger.Logger,
@@ -63,6 +77,8 @@ func NewService(
 		throttle: throttle,
 		im:       im,
 		imTokens: imTokens,
+		outbox:   outbox,
+		imSync:   imSync,
 		tokens:   tokens,
 		cfg:      cfg,
 		log:      log,

@@ -31,31 +31,15 @@ func (s *Service) RetryIMProvision(ctx context.Context, userID int64) error {
 	if user.IMStatus == domain.IMStatusReady {
 		return nil
 	}
-	if err := s.provisionIM(ctx, user); err != nil {
+	if err := s.imSync.Provision(ctx, user); err != nil {
 		return errcode.ErrDependency
 	}
 	return nil
 }
 
-// provisionIM 在 IM 侧开通用户并回写开通状态；失败只记录日志并返回错误，由调用方决定影响范围。
+// provisionIM 委托 IMProvisioner 开通用户，保留方法以复用账号服务的日志与状态语义。
 func (s *Service) provisionIM(ctx context.Context, user *domain.User) error {
-	// 客户端断开不应导致已发出的开通请求被误判失败，回写状态同样需要继续执行。
-	provisionCtx := context.WithoutCancel(ctx)
-	userID := convert.ToString(user.ID)
-
-	if err := s.im.RegisterUser(provisionCtx, userID, user.Nickname); err != nil {
-		s.log.Warnf("IM 开通失败: user_id=%d, err=%v", user.ID, err)
-		if writeErr := s.users.UpdateIMStatus(provisionCtx, user.ID, domain.IMStatusFailed, nil, s.now()); writeErr != nil {
-			s.log.Errorf("回写 IM 开通状态失败: user_id=%d, status=%d, err=%v", user.ID, domain.IMStatusFailed, writeErr)
-		}
-		return err
-	}
-
-	syncedAt := s.now()
-	if err := s.users.UpdateIMStatus(provisionCtx, user.ID, domain.IMStatusReady, &syncedAt, syncedAt); err != nil {
-		s.log.Errorf("回写 IM 开通状态失败: user_id=%d, status=%d, err=%v", user.ID, domain.IMStatusReady, err)
-	}
-	return nil
+	return s.imSync.Provision(ctx, user)
 }
 
 // IMToken 为指定用户与平台兑换 IM token，命中缓存时直接返回。

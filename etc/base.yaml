@@ -62,3 +62,6 @@ im:
   admin_secret: ""
   timeout: 3s
   token_refresh_ahead: 60s
+  # IM 开通补偿 outbox：扫描间隔与单批处理条数，启用 IM 时必须大于 0。
+  outbox_scan_interval: 60s
+  outbox_batch_size: 20
