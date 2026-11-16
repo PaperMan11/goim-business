@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	domain "goim-business/internal/domain/account"
+	"goim-business/internal/service/ports"
 	"goim-business/internal/types"
 )
 
@@ -17,7 +18,7 @@ import (
 type fakeOutbox struct {
 	mu      sync.Mutex
 	seq     int64
-	entries []domain.OutboxEntry
+	entries []ports.OutboxEntry
 }
 
 func newFakeOutbox() *fakeOutbox {
@@ -28,23 +29,23 @@ func (f *fakeOutbox) Enqueue(_ context.Context, userID int64, action, payload st
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq++
-	f.entries = append(f.entries, domain.OutboxEntry{
+	f.entries = append(f.entries, ports.OutboxEntry{
 		ID:          f.seq,
 		UserID:      userID,
 		Action:      action,
 		Payload:     payload,
-		Status:      domain.OutboxStatusPending,
+		Status:      ports.OutboxStatusPending,
 		NextRetryAt: time.Now(),
 	})
 	return nil
 }
 
-func (f *fakeOutbox) FindPending(_ context.Context, userID int64, action string) (*domain.OutboxEntry, error) {
+func (f *fakeOutbox) FindPending(_ context.Context, userID int64, action string) (*ports.OutboxEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := len(f.entries) - 1; i >= 0; i-- {
 		entry := f.entries[i]
-		if entry.UserID != userID || entry.Action != action || entry.Status == domain.OutboxStatusDone {
+		if entry.UserID != userID || entry.Action != action || entry.Status == ports.OutboxStatusDone {
 			continue
 		}
 		clone := entry
@@ -53,12 +54,12 @@ func (f *fakeOutbox) FindPending(_ context.Context, userID int64, action string)
 	return nil, nil
 }
 
-func (f *fakeOutbox) ListDue(_ context.Context, limit int) ([]domain.OutboxEntry, error) {
+func (f *fakeOutbox) ListDue(_ context.Context, limit int) ([]ports.OutboxEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]domain.OutboxEntry, 0, len(f.entries))
+	out := make([]ports.OutboxEntry, 0, len(f.entries))
 	for _, entry := range f.entries {
-		if entry.Status == domain.OutboxStatusDone {
+		if entry.Status == ports.OutboxStatusDone {
 			continue
 		}
 		out = append(out, entry)
@@ -74,7 +75,7 @@ func (f *fakeOutbox) MarkDone(_ context.Context, id int64) error {
 	defer f.mu.Unlock()
 	for i := range f.entries {
 		if f.entries[i].ID == id {
-			f.entries[i].Status = domain.OutboxStatusDone
+			f.entries[i].Status = ports.OutboxStatusDone
 		}
 	}
 	return nil
@@ -85,7 +86,7 @@ func (f *fakeOutbox) MarkRetry(_ context.Context, id int64, attempts int, lastEr
 	defer f.mu.Unlock()
 	for i := range f.entries {
 		if f.entries[i].ID == id {
-			f.entries[i].Status = domain.OutboxStatusFailed
+			f.entries[i].Status = ports.OutboxStatusFailed
 			f.entries[i].Attempts = attempts
 			f.entries[i].LastError = lastError
 			f.entries[i].NextRetryAt = nextRetryAt
@@ -94,7 +95,7 @@ func (f *fakeOutbox) MarkRetry(_ context.Context, id int64, attempts int, lastEr
 	return nil
 }
 
-func (f *fakeOutbox) latest(userID int64) (domain.OutboxEntry, bool) {
+func (f *fakeOutbox) latest(userID int64) (ports.OutboxEntry, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := len(f.entries) - 1; i >= 0; i-- {
@@ -102,7 +103,7 @@ func (f *fakeOutbox) latest(userID int64) (domain.OutboxEntry, bool) {
 			return f.entries[i], true
 		}
 	}
-	return domain.OutboxEntry{}, false
+	return ports.OutboxEntry{}, false
 }
 
 func (f *fakeOutbox) count() int {
@@ -127,8 +128,8 @@ func TestRegisterIMOutboxMarkedDone(t *testing.T) {
 
 	entry, ok := env.outbox.latest(userID)
 	require.True(t, ok, "注册后应写入 outbox")
-	require.Equal(t, domain.OutboxActionProvisionIM, entry.Action)
-	require.Equal(t, domain.OutboxStatusDone, entry.Status)
+	require.Equal(t, ports.OutboxActionProvisionIM, entry.Action)
+	require.Equal(t, ports.OutboxStatusDone, entry.Status)
 	require.Equal(t, 0, entry.Attempts)
 
 	stored, err := env.users.GetByID(ctx, userID)
@@ -155,7 +156,7 @@ func TestRegisterIMOutboxEntersRetry(t *testing.T) {
 
 	entry, ok := env.outbox.latest(userID)
 	require.True(t, ok)
-	require.Equal(t, domain.OutboxStatusFailed, entry.Status)
+	require.Equal(t, ports.OutboxStatusFailed, entry.Status)
 	require.Equal(t, 1, entry.Attempts)
 	require.NotEmpty(t, entry.LastError)
 	require.True(t, entry.NextRetryAt.After(nowBefore), "重试时间应晚于当前时间")
@@ -182,16 +183,16 @@ func TestProcessIMOutboxRecoversFailed(t *testing.T) {
 
 	entry, ok := env.outbox.latest(userID)
 	require.True(t, ok)
-	require.Equal(t, domain.OutboxStatusFailed, entry.Status)
+	require.Equal(t, ports.OutboxStatusFailed, entry.Status)
 
 	// goim 恢复后，下一轮补偿应把失败任务推进到完成。
 	env.provisioner.setErr(nil)
-	processed := env.svc.ProcessIMOutbox(ctx)
+	processed := env.imSync.RunDue(ctx)
 	require.Equal(t, 1, processed)
 
 	entry, ok = env.outbox.latest(userID)
 	require.True(t, ok)
-	require.Equal(t, domain.OutboxStatusDone, entry.Status)
+	require.Equal(t, ports.OutboxStatusDone, entry.Status)
 	require.Equal(t, 2, env.provisioner.callCount())
 
 	stored, err := env.users.GetByID(ctx, userID)
@@ -219,13 +220,13 @@ func TestProcessIMOutboxSkipsReadyUser(t *testing.T) {
 	at := env.svc.now()
 	require.NoError(t, env.users.UpdateIMStatus(ctx, userID, domain.IMStatusReady, &at, at))
 	env.provisioner.setErr(nil)
-	processed := env.svc.ProcessIMOutbox(ctx)
+	processed := env.imSync.RunDue(ctx)
 	require.Equal(t, 1, processed)
 	require.Equal(t, 1, env.provisioner.callCount(), "已 Ready 的用户不应再次调用 goim")
 
 	entry, ok := env.outbox.latest(userID)
 	require.True(t, ok)
-	require.Equal(t, domain.OutboxStatusDone, entry.Status)
+	require.Equal(t, ports.OutboxStatusDone, entry.Status)
 }
 
 func TestProcessIMOutboxDisabled(t *testing.T) {
@@ -241,6 +242,6 @@ func TestProcessIMOutboxDisabled(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, env.outbox.count(), "IM 未启用时不应写入 outbox")
 
-	require.Equal(t, 0, env.svc.ProcessIMOutbox(ctx))
+	require.Equal(t, 0, env.imSync.RunDue(ctx))
 	require.Equal(t, 0, env.provisioner.callCount())
 }

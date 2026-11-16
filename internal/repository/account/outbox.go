@@ -7,14 +7,14 @@ import (
 
 	"gorm.io/gorm"
 
-	domain "goim-business/internal/domain/account"
 	"goim-business/internal/model"
 	"goim-business/internal/pkg/timex"
 	"goim-business/internal/repository"
+	"goim-business/internal/service/ports"
 )
 
-func outboxFromRecord(record *model.IMOutbox) domain.OutboxEntry {
-	return domain.OutboxEntry{
+func outboxFromRecord(record *model.IMOutbox) ports.OutboxEntry {
+	return ports.OutboxEntry{
 		ID:          record.ID,
 		UserID:      record.UserID,
 		Action:      record.Action,
@@ -47,7 +47,7 @@ func (r *OutboxRepo) Enqueue(ctx context.Context, userID int64, action, payload 
 		UserID:      userID,
 		Action:      action,
 		Payload:     payload,
-		Status:      domain.OutboxStatusPending,
+		Status:      ports.OutboxStatusPending,
 		Attempts:    0,
 		NextRetryAt: now,
 		CreatedAt:   now,
@@ -56,11 +56,11 @@ func (r *OutboxRepo) Enqueue(ctx context.Context, userID int64, action, payload 
 }
 
 // FindPending 返回指定用户与动作最近一条未完成任务；不存在时返回 (nil, nil)。
-func (r *OutboxRepo) FindPending(ctx context.Context, userID int64, action string) (*domain.OutboxEntry, error) {
+func (r *OutboxRepo) FindPending(ctx context.Context, userID int64, action string) (*ports.OutboxEntry, error) {
 	var record model.IMOutbox
 	err := r.dbFrom(ctx).
 		Where("user_id = ? AND action = ? AND status IN ?",
-			userID, action, []int8{domain.OutboxStatusPending, domain.OutboxStatusFailed}).
+			userID, action, []int8{ports.OutboxStatusPending, ports.OutboxStatusFailed}).
 		Order("id DESC").
 		First(&record).Error
 	if err != nil {
@@ -74,13 +74,13 @@ func (r *OutboxRepo) FindPending(ctx context.Context, userID int64, action strin
 }
 
 // ListDue 取出已到期的待处理/失败任务，按到期时间升序。
-func (r *OutboxRepo) ListDue(ctx context.Context, limit int) ([]domain.OutboxEntry, error) {
+func (r *OutboxRepo) ListDue(ctx context.Context, limit int) ([]ports.OutboxEntry, error) {
 	if limit <= 0 {
 		limit = 1
 	}
 	var records []model.IMOutbox
 	err := r.dbFrom(ctx).
-		Where("status IN ?", []int8{domain.OutboxStatusPending, domain.OutboxStatusFailed}).
+		Where("status IN ?", []int8{ports.OutboxStatusPending, ports.OutboxStatusFailed}).
 		Where("next_retry_at <= ?", timex.Now()).
 		Order("next_retry_at ASC, id ASC").
 		Limit(limit).
@@ -88,7 +88,7 @@ func (r *OutboxRepo) ListDue(ctx context.Context, limit int) ([]domain.OutboxEnt
 	if err != nil {
 		return nil, err
 	}
-	entries := make([]domain.OutboxEntry, 0, len(records))
+	entries := make([]ports.OutboxEntry, 0, len(records))
 	for i := range records {
 		entries = append(entries, outboxFromRecord(&records[i]))
 	}
@@ -100,7 +100,7 @@ func (r *OutboxRepo) MarkDone(ctx context.Context, id int64) error {
 	return r.dbFrom(ctx).Model(&model.IMOutbox{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
-			"status":     domain.OutboxStatusDone,
+			"status":     ports.OutboxStatusDone,
 			"updated_at": timex.Now(),
 		}).Error
 }
@@ -110,7 +110,7 @@ func (r *OutboxRepo) MarkRetry(ctx context.Context, id int64, attempts int, last
 	return r.dbFrom(ctx).Model(&model.IMOutbox{}).
 		Where("id = ?", id).
 		Updates(map[string]any{
-			"status":        domain.OutboxStatusFailed,
+			"status":        ports.OutboxStatusFailed,
 			"attempts":      attempts,
 			"last_error":    lastError,
 			"next_retry_at": nextRetryAt,

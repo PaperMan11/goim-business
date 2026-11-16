@@ -50,6 +50,7 @@ type testEnv struct {
 	provisioner *fakeProvisioner
 	imTokens    *fakeIMTokenCache
 	outbox      *fakeOutbox
+	imSync      *imjob.Worker
 }
 
 func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
@@ -92,6 +93,7 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 		provisioner: provisioner,
 		imTokens:    imTokens,
 		outbox:      outbox,
+		imSync:      imSync,
 	}
 }
 

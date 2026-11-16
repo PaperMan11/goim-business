@@ -231,7 +231,7 @@ gin.New()
 | MySQL | MySQL 8.x（本地 compose 使用 **mysql:8.4**），`utf8mb4_0900_ai_ci`，InnoDB | 事务、唯一约束满足账号域需求 |
 | Redis | Redis 7.x（compose 使用 **redis:7-alpine**），`go-redis/v9` **v9.7.0** | 会话活跃标记、限流、登录失败计数 |
 
-**分层形态**：模块化单体（modular monolith）。当前是“领域模型 + 应用服务 + 仓储实现”的轻量分层：`internal/domain/account` 定义实体/值对象/仓储端口（含 outbox 仓储端口），`internal/service/ports` 定义缓存与事务端口，`internal/repository/account` 提供 gorm 实现。没有 `internal/usecase`，也不采用 DDD 四层重型模板。
+**分层形态**：模块化单体（modular monolith）。当前是“领域模型 + 应用服务 + 仓储实现”的轻量分层：`internal/domain/account` 定义实体/值对象与聚合仓储端口（用户、凭证、会话），`internal/service/ports` 定义缓存、事务、外部客户端与 outbox 投递端口，`internal/repository/account` 提供 gorm 实现。没有 `internal/usecase`，也不采用 DDD 四层重型模板。
 
 ### 4.2 配置管理（✅ 已实现，多环境 staging 仅保留支持）
 
@@ -653,7 +653,7 @@ CREATE TABLE outbox_events (
 
 新增定时任务只需实现 `cron.Job`（`Name` / `Spec` / `Timeout` / `Run`）并在 `cmd/cron` 注册；锁键自动为 `{redis.key_prefix}:{env}:cron:{name}`，不同任务使用不同锁，不会相互阻塞。`Timeout` 必须小于锁 TTL（当前 5 分钟）。
 
-通用 `outbox_events` 仍为规划（⏳）：计划用 `SELECT ... FOR UPDATE SKIP LOCKED` 批量取任务，指数退避（1m/5m/30m/2h/6h，上限 8 次），超过阈值进死信状态并告警。worker 已完全独立：实现位于 `internal/job/im`（`Worker.Provision/Settle/RunDue`），账号域只依赖 `IMProvisioner` 接口；outbox 的端口与类型（`OutboxEntry`、状态常量、`IMOutboxRepository`）下沉到 `internal/domain/account`，`service/ports` 只保留缓存、限流、事务与外部客户端等基础设施端口。`cmd/cron` 使用 `NewCronApp` 精简装配（不构建 HTTP、令牌、限流组件），并以 Redis 分布式锁保证多实例下同一时刻只有一个补偿任务在运行。
+通用 `outbox_events` 仍为规划（⏳）：计划用 `SELECT ... FOR UPDATE SKIP LOCKED` 批量取任务，指数退避（1m/5m/30m/2h/6h，上限 8 次），超过阈值进死信状态并告警。worker 已完全独立：实现位于 `internal/job/im`（`Worker.Provision/Settle/RunDue`），账号域只依赖 `IMProvisioner` 接口；outbox 作为通用投递机制，其端口与类型（`OutboxEntry`、状态常量、`OutboxRepository`）定义在 `internal/service/ports/outbox.go`，domain 只保留用户、凭证、会话三个聚合的仓储。`cmd/cron` 使用 `NewCronApp` 精简装配（不构建 HTTP、令牌、限流组件），并以 Redis 分布式锁保证多实例下同一时刻只有一个补偿任务在运行。
 
 升级路径：当出现跨团队消费、峰值 >1000 TPS 或需要多订阅方时，再把 outbox 投递到 Kafka；业务代码只需替换 dispatcher。
 
@@ -710,7 +710,7 @@ goim-business/
 │   │   ├── config.go               # 配置结构体、加载、强校验
 │   │   └── config_test.go
 │   ├── cron/scheduler.go           # 定时任务注册：@every 调度 + 按任务名分布式锁
-│   ├── domain/account/             # 实体、值对象、策略、错误、仓储端口（outbox 端口在 repository.go）
+│   ├── domain/account/             # 实体、值对象、策略、错误、聚合仓储端口
 │   │   ├── user.go
 │   │   ├── credential.go
 │   │   ├── session.go
@@ -758,7 +758,7 @@ goim-business/
 │   │   └── account/                # user/credential/session 仓储实现
 │   ├── service/
 │   │   ├── account/                # 注册/登录/刷新/会话/改密 + 单测
-│   │   └── ports/ports.go          # SessionStateCache / LoginThrottle / TxManager
+│   │   └── ports/                  # 基础设施端口：session/login/tx/im/outbox 按用途分文件
 │   └── types/account.go            # 请求/响应契约
 ├── deploy/compose.dev.yaml         # MySQL 8.4 + Redis 7
 ├── docs/DEVELOPMENT.md             # 本文

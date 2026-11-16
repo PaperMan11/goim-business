@@ -27,7 +27,7 @@ const (
 type Worker struct {
 	users     domain.UserRepository
 	im        ports.IMClient
-	outbox    domain.IMOutboxRepository
+	outbox    ports.OutboxRepository
 	batchSize int
 	now       func() time.Time
 	log       logger.Logger
@@ -37,7 +37,7 @@ type Worker struct {
 func NewWorker(
 	users domain.UserRepository,
 	im ports.IMClient,
-	outbox domain.IMOutboxRepository,
+	outbox ports.OutboxRepository,
 	batchSize int,
 	now func() time.Time,
 	log logger.Logger,
@@ -85,7 +85,7 @@ func (w *Worker) Settle(ctx context.Context, userID int64, provisionErr error) {
 	if w.outbox == nil {
 		return
 	}
-	entry, err := w.outbox.FindPending(ctx, userID, domain.OutboxActionProvisionIM)
+	entry, err := w.outbox.FindPending(ctx, userID, ports.OutboxActionProvisionIM)
 	if err != nil {
 		w.log.Errorf("查询 IM outbox 失败: user_id=%d, err=%v", userID, err)
 		return
@@ -132,8 +132,8 @@ func (w *Worker) RunDue(ctx context.Context) int {
 }
 
 // processEntry 处理单条任务：已 Ready 的用户跳过 goim 调用直接标记完成。
-func (w *Worker) processEntry(ctx context.Context, entry domain.OutboxEntry) {
-	if entry.Action != domain.OutboxActionProvisionIM {
+func (w *Worker) processEntry(ctx context.Context, entry ports.OutboxEntry) {
+	if entry.Action != ports.OutboxActionProvisionIM {
 		w.log.Warnf("未知 IM outbox 任务: id=%d, action=%s", entry.ID, entry.Action)
 		return
 	}
@@ -163,7 +163,7 @@ func (w *Worker) processEntry(ctx context.Context, entry domain.OutboxEntry) {
 }
 
 // retry 记录一次补偿失败并安排下次执行时间。
-func (w *Worker) retry(ctx context.Context, entry domain.OutboxEntry, cause error) {
+func (w *Worker) retry(ctx context.Context, entry ports.OutboxEntry, cause error) {
 	attempts := entry.Attempts + 1
 	nextRetryAt := w.now().Add(backoff(attempts))
 	errText := text.TruncateRunes(cause.Error(), errorLimit)

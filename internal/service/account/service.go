@@ -26,11 +26,10 @@ type Config struct {
 	IMOutboxBatchSize int
 }
 
-// IMProvisioner 抽象 IM 开通与 outbox 补偿；实现位于 internal/job/im，账号域只依赖该接口。
+// IMProvisioner 是账号域消费的 IM 开通能力；实现位于 internal/job/im，账号域只依赖该接口。
 type IMProvisioner interface {
 	Provision(ctx context.Context, user *domain.User) error
 	Settle(ctx context.Context, userID int64, provisionErr error)
-	RunDue(ctx context.Context) int
 }
 
 // Service 是账号域服务。
@@ -43,7 +42,7 @@ type Service struct {
 	throttle ports.LoginThrottle
 	im       ports.IMClient
 	imTokens ports.IMTokenCache
-	outbox   domain.IMOutboxRepository
+	outbox   ports.OutboxRepository
 	imSync   IMProvisioner
 	tokens   *token.Issuer
 	cfg      Config
@@ -62,7 +61,7 @@ func NewService(
 	throttle ports.LoginThrottle,
 	im ports.IMClient,
 	imTokens ports.IMTokenCache,
-	outbox domain.IMOutboxRepository,
+	outbox ports.OutboxRepository,
 	imSync IMProvisioner,
 	tokens *token.Issuer,
 	cfg Config,
