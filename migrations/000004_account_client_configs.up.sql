@@ -1,4 +1,4 @@
--- 000004_client_configs: 客户端配置表
+-- 000004_account_client_configs: 客户端配置表
 -- 表归属：账号服务（account）。platform=0 为全平台默认，具体平台行覆盖默认值。
 -- version 由运维在调整配置时递增；客户端通过 ETag 缓存，版本变化后自动拉取新配置。
 

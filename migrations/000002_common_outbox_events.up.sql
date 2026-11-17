@@ -1,4 +1,4 @@
--- 000002_outbox_events: 通用 outbox 任务表（事务性 outbox）
+-- 000002_common_outbox_events: 通用 outbox 任务表（事务性 outbox）
 -- 表归属：跨业务通用投递机制，不属于任何业务域；user_id 为逻辑关联，不建数据库外键。
 -- 时间约定：沿用 DATETIME(3)，应用层统一写入 UTC。
 

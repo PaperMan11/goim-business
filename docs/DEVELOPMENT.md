@@ -323,7 +323,7 @@ cors:
 
 **结论：`golang-migrate/migrate` v4.18.1 + SQL 版本文件 + 独立 `cmd/migrate`，生产禁用 `AutoMigrate`。**
 
-- 迁移文件：`migrations/000001_init.up.sql` / `.down.sql`，由 `migrations/embed.go` 的 `embed.FS` 打包进二进制。
+- 迁移文件：`migrations/000001_account_init.up.sql` / `.down.sql`，由 `migrations/embed.go` 的 `embed.FS` 打包进二进制。
 - `cmd/migrate` 支持 `up`、`down`、`version` 三个子命令；自动把 gorm DSN 转成 `mysql://` URL 并补 `multiStatements=true`。
 - 规则：
   - 只前进（forward-only）；`down` 仅用于本地回滚（当前 `down` 直接删除三张表）。
@@ -632,7 +632,7 @@ services:
 - goim 已有 Kafka，但那是消息扇出通道，业务服务接入会引入消费组、offset、运维与重复消费治理，收益不足。
 - Redis Stream/asynq 也可行，但关键链路（账号创建 → IM 开通）需要“与业务事务同生共死”，MySQL outbox 最稳。
 
-通用事件表（✅ 已创建，`migrations/000002_outbox_events`，不属于任何业务域）：
+通用事件表（✅ 已创建，`migrations/000002_common_outbox_events`，不属于任何业务域）：
 
 ```sql
 CREATE TABLE outbox_events (
@@ -699,11 +699,12 @@ goim-business/
 │   ├── dev.yaml                    # 本地差异（DSN/JWT secret/CORS）
 │   └── prod.yaml                   # 生产差异（密钥留空，由环境变量注入）
 ├── migrations/
-│   ├── 000001_init.up.sql          # account_users / account_credentials / account_sessions
-│   ├── 000001_init.down.sql
-│   ├── 000002_outbox_events.up.sql # 通用 outbox 任务表（+ down）
+│   ├── README.md                   # 迁移命名与编写约定、版本索引
+│   ├── 000001_account_init.up.sql  # account_users / account_credentials / account_sessions
+│   ├── 000001_account_init.down.sql
+│   ├── 000002_common_outbox_events.up.sql # 通用 outbox 任务表（+ down）
 │   ├── 000003_account_devices.up.sql # 设备登记表（+ down）
-│   ├── 000004_client_configs.up.sql  # 客户端配置表（+ down）
+│   ├── 000004_account_client_configs.up.sql  # 客户端配置表（+ down）
 │   └── embed.go                    # embed.FS
 ├── api/
 │   ├── openapi.yaml                # 账号/IM/资料/设备/配置最小 OpenAPI 3.0.3 契约
@@ -1322,7 +1323,7 @@ POST /admin/announcements
 > 决策：跳过“契约全量铺开”和 B 档占位路由，只保留 M1 运行所必需的基础设施。
 
 - 目录、`go.mod`、分层骨架、配置加载与校验、zap、统一响应/错误码、request_id、recovery、CORS、metrics、health、graceful shutdown、Makefile、Dockerfile、compose、最小 CI。✅
-- 迁移框架与 `000001_init`（只建 `account_users`、`account_credentials`、`account_sessions`）。✅
+- 迁移框架与 `000001_account_init`（只建 `account_users`、`account_credentials`、`account_sessions`）。✅
 - OpenAPI 只写 M1 实际存在的 operation；B/C 档只在设计文档中保留，不生成路由。⏳ 当前未引入 OpenAPI 工具链。
 - 验收：`make run` 起服务；`/readyz` 200；`/metrics` 可抓；`go test ./...` 绿；空库迁移成功；镜像可构建。✅（`make dev` 不存在，使用 `make run` 或 `make build`）
 
