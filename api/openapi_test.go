@@ -27,7 +27,7 @@ func TestOpenAPIAccountContract(t *testing.T) {
 	require.Equal(t, "/api/v1", mustMap(t, servers[0])["url"])
 
 	paths := mustMap(t, spec["paths"])
-	require.Len(t, paths, 10, "只允许描述已实现的 7 个账号接口与 3 个 IM 接口")
+	require.Len(t, paths, 13, "只允许描述 13 条路径：账号 7 条、IM 3 条、资料 3 条")
 	for _, path := range []string{
 		"/account/register",
 		"/account/login",
@@ -39,6 +39,9 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		"/im/token",
 		"/im/status",
 		"/im/retry",
+		"/profile/me",
+		"/profile/batch",
+		"/profile/users/{userId}",
 	} {
 		require.Contains(t, paths, path)
 	}
@@ -59,6 +62,10 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		"SessionViewList",
 		"IMTokenResponse",
 		"IMStatusResponse",
+		"ProfileView",
+		"PublicProfileView",
+		"UpdateProfileRequest",
+		"BatchProfilesRequest",
 		"ErrorResponse",
 	} {
 		require.Contains(t, schemas, name)
@@ -71,22 +78,29 @@ func TestOpenAPIAccountContract(t *testing.T) {
 	require.Equal(t, "bearer", bearer["scheme"])
 	require.Equal(t, "JWT", bearer["bearerFormat"])
 
-	authed := map[string]string{
-		"/account/logout":          "post",
-		"/account/sessions":        "get",
-		"/account/sessions/revoke": "post",
-		"/account/password":        "put",
-		"/im/token":                "post",
-		"/im/status":               "get",
-		"/im/retry":                "post",
+	authed := []struct {
+		path   string
+		method string
+	}{
+		{"/account/logout", "post"},
+		{"/account/sessions", "get"},
+		{"/account/sessions/revoke", "post"},
+		{"/account/password", "put"},
+		{"/im/token", "post"},
+		{"/im/status", "get"},
+		{"/im/retry", "post"},
+		{"/profile/me", "get"},
+		{"/profile/me", "put"},
+		{"/profile/batch", "post"},
+		{"/profile/users/{userId}", "get"},
 	}
-	for path, method := range authed {
-		op := mustMap(t, mustMap(t, paths[path])[method])
+	for _, route := range authed {
+		op := mustMap(t, mustMap(t, paths[route.path])[route.method])
 		security, ok := op["security"].([]any)
-		require.True(t, ok, "%s %s 必须声明 security", method, path)
+		require.True(t, ok, "%s %s 必须声明 security", route.method, route.path)
 		require.Len(t, security, 1)
 		require.Contains(t, mustMap(t, security[0]), "bearerAuth",
-			"%s %s 必须使用 bearerAuth", method, path)
+			"%s %s 必须使用 bearerAuth", route.method, route.path)
 	}
 }
 

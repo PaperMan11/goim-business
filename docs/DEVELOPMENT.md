@@ -524,7 +524,7 @@ refresh 规则（✅ 已实现）：
 
 **结论：原计划 OpenAPI 3 设计先行（`api/openapi.yaml`）+ `oapi-codegen` 生成 gin 路由与 DTO。**
 
-当前已在 `api/openapi.yaml` 落地账号域 7 个接口与 IM 域 3 个接口的 OpenAPI 3.0.3 契约（路由、DTO、统一响应、错误码与鉴权均按现有实现描述），并由 `api/openapi_test.go` 做守护测试；仍不引入 Swagger UI 与代码生成，`go.mod` 也没有 `oapi-codegen`/`kin-openapi` 依赖。后续全量契约的落地流程保持不变：
+当前已在 `api/openapi.yaml` 落地账号域 7 个接口、IM 域 3 个接口与资料域 4 个 operation（3 条路径）的 OpenAPI 3.0.3 契约（路由、DTO、统一响应、错误码与鉴权均按现有实现描述），并由 `api/openapi_test.go` 做守护测试；仍不引入 Swagger UI 与代码生成，`go.mod` 也没有 `oapi-codegen`/`kin-openapi` 依赖。后续全量契约的落地流程保持不变：
 
 1. 先改 `api/openapi.yaml`，PR 中评审契约；只写已实现 operation。
 2. `go generate ./...` 重新生成 handler 绑定代码。
@@ -1397,7 +1397,7 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 - [x] ✅ M1：多端登录互不影响，超限踢最旧，登出/踢出即时生效。
 - [x] ✅ M1：`userID` 即 IM userID，注册流程原样写入，无映射层（IM 下发待 M2）。
 - [x] ✅ M1：统一错误码与响应格式覆盖所有账号接口；敏感字段不落日志。
-- [x] ✅ M1：账号接口在最小 OpenAPI/代码中可查；`api/openapi.yaml` 已覆盖 7 个账号接口与 3 个 IM 接口。
+- [x] ✅ M1：账号接口在最小 OpenAPI/代码中可查；`api/openapi.yaml` 已覆盖 7 个账号接口、3 个 IM 接口与 4 个资料 operation。
 - [x] ✅ `/healthz`、`/readyz`、`/metrics` 已独立端口暴露。
 - [x] ✅ 日志字段规范落地，request_id 贯通；`X-Request-ID` 回写。
 - [x] ✅ 登录/注册限流可配置，限流实现已落地（防刷用例已补：`internal/middlewares/ratelimit_test.go`）。
@@ -1422,6 +1422,6 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 4. **验收（✅ 已完成）**：`go test ./...` 全绿；空库迁移成功；curl 跑通注册→登录→刷新→登出；多端会话互不影响；日志无敏感字段。
 5. **M2 IM 对接（🚧 进行中）**：goim 客户端、注册同步开通与手动重试、IM 开通 outbox 与后台补偿、`/im/token`（Redis 缓存 + IP 限流）、`/im/status`、`/im/retry` 已完成；Web 客户端 `adminSecret` 改造仍 ⏳。
 
-未包含（⏳ 后续 M2+）：资料/设备/配置/文件域、B/C 档路由、管理端、OpenAPI 全量契约（当前仅账号域与 IM 域最小契约）、RustFS/推送。
+未包含（⏳ 后续 M2+）：设备/配置/文件域、B/C 档路由、管理端、OpenAPI 全量契约（当前仅账号、IM 与资料域最小契约）、RustFS/推送。
 
 代码不自动提交，提交时机与粒度由用户决定。

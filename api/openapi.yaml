@@ -3,7 +3,7 @@ info:
   title: goim-business API
   version: 1.0.0
   description: |
-    goim-business 账号域与 IM 凭证的 OpenAPI 契约，只描述当前已注册的 10 个接口。
+    goim-business 账号域、IM 凭证与用户资料的 OpenAPI 契约，只描述当前已注册的 14 个 operation（13 条路径）。
 
     **统一响应约定**：所有接口的 HTTP 状态码恒为 200，业务结果一律由响应体 `code` 判断：
     `0` 表示成功，非 `0` 为业务错误码，错误提示见 `msg`，`data` 可能为空或携带明细。
@@ -21,6 +21,8 @@ tags:
     description: 账号注册、登录、令牌刷新、登出、会话管理与改密
   - name: IM
     description: IM token 兑换、开通状态查询与手动重试
+  - name: Profile
+    description: 本人资料读写、公开资料批量查询与单用户查询
 
 servers:
   - url: /api/v1
@@ -208,6 +210,84 @@ paths:
         '200':
           $ref: '#/components/responses/IMStatusOK'
 
+  /profile/me:
+    get:
+      tags: [Profile]
+      operationId: getMyProfile
+      summary: 查询本人资料
+      description: |
+        返回当前用户的完整资料：登录名、昵称、头像 key 与签名。
+        错误码：1002 未认证或登录态已失效、1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          $ref: '#/components/responses/ProfileOK'
+    put:
+      tags: [Profile]
+      operationId: updateMyProfile
+      summary: 更新本人资料
+      description: |
+        只更新请求体中出现的字段，未出现的字段保持不变；三个字段全部缺省返回 1001。
+        昵称不能为空；头像 key 与签名传空字符串表示清空。
+        资料变更与 IM 同步任务在同一事务提交，提交后若 IM 已开通则即时同步 goim；
+        IM 未开通时任务退避重试，开通完成后自动补齐。
+        错误码：1001 参数错误、1002 未认证或登录态已失效、1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/ProfileOK'
+
+  /profile/batch:
+    post:
+      tags: [Profile]
+      operationId: batchProfiles
+      summary: 批量查询公开资料
+      description: |
+        按 userId 批量返回公开资料（仅昵称与头像 key），单次最多 100 个；
+        不存在的用户直接跳过，不报错。userId 非数字返回 1001。
+        错误码：1001 参数错误、1002 未认证或登录态已失效、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchProfilesRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/ProfileListOK'
+
+  /profile/users/{userId}:
+    get:
+      tags: [Profile]
+      operationId: getPublicProfile
+      summary: 查询指定用户公开资料
+      description: |
+        返回指定用户的昵称与头像 key；userId 非数字返回 1001，用户不存在返回 1004。
+        错误码：1001 参数错误、1002 未认证或登录态已失效、1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          description: 用户 ID（十进制数字字符串）。
+          schema:
+            type: string
+          example: "123456789"
+      responses:
+        '200':
+          $ref: '#/components/responses/PublicProfileOK'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -308,6 +388,48 @@ components:
           schema:
             oneOf:
               - $ref: '#/components/schemas/IMStatusResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    ProfileOK:
+      description: |
+        成功时 data 为 ProfileView（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/ProfileResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    ProfileListOK:
+      description: |
+        成功时 data 为 PublicProfileView 数组（code=0），不存在的用户不出现在结果中；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/ProfileListResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    PublicProfileOK:
+      description: |
+        成功时 data 为 PublicProfileView（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/PublicProfileResult'
               - $ref: '#/components/schemas/ErrorResponse'
 
   schemas:
@@ -652,6 +774,142 @@ components:
           example: success
         data:
           $ref: '#/components/schemas/IMStatusResponse'
+
+    ProfileView:
+      type: object
+      description: 当前用户的完整资料。
+      required: [userId, loginName, nickname, avatarKey, bio]
+      properties:
+        userId:
+          type: string
+          description: 用户 ID（十进制数字字符串）。
+          example: "123456789"
+        loginName:
+          type: string
+          example: alice
+        nickname:
+          type: string
+          description: 昵称；最长 64 个字符，不会为空。
+          example: Alice
+        avatarKey:
+          type: string
+          description: |
+            头像对象 key（不直接对外提供访问地址，展示前需换取 URL）。
+            为空表示未设置头像。
+          example: "avatar/2026/11/123456789.png"
+        bio:
+          type: string
+          description: 个性签名；最长 255 个字符，为空表示未设置。
+          example: 你好，世界
+
+    PublicProfileView:
+      type: object
+      description: 他人可见的公开资料，不含登录名与签名。
+      required: [userId, nickname, avatarKey]
+      properties:
+        userId:
+          type: string
+          description: 用户 ID（十进制数字字符串）。
+          example: "123456789"
+        nickname:
+          type: string
+          example: Alice
+        avatarKey:
+          type: string
+          description: 头像对象 key；为空表示未设置头像。
+          example: "avatar/2026/11/123456789.png"
+
+    UpdateProfileRequest:
+      type: object
+      description: |
+        更新资料请求；字段缺省表示不修改，三个字段全部缺省返回 1001。
+        昵称不能为空，头像 key 与签名传空字符串表示清空。
+      properties:
+        nickname:
+          type: string
+          description: 昵称；最长 64 个字符，不能为空。
+          maxLength: 64
+          example: Alice
+        avatarKey:
+          type: string
+          description: 头像对象 key；最长 255 个字符。
+          maxLength: 255
+          example: "avatar/2026/11/123456789.png"
+        bio:
+          type: string
+          description: 个性签名；最长 255 个字符。
+          maxLength: 255
+          example: 你好，世界
+      example:
+        nickname: Alice
+        bio: 你好，世界
+
+    BatchProfilesRequest:
+      type: object
+      description: 批量查询公开资料请求；不存在的用户会被跳过。
+      required: [userIds]
+      properties:
+        userIds:
+          type: array
+          description: 用户 ID 列表（十进制数字字符串），1-100 个。
+          minItems: 1
+          maxItems: 100
+          items:
+            type: string
+            example: "123456789"
+      example:
+        userIds: ["123456789", "987654321"]
+
+    PublicProfileViewList:
+      type: array
+      description: 公开资料列表。
+      items:
+        $ref: '#/components/schemas/PublicProfileView'
+
+    ProfileResult:
+      type: object
+      description: 本人资料查询/更新的成功响应体。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/ProfileView'
+
+    ProfileListResult:
+      type: object
+      description: 批量公开资料查询的成功响应体。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/PublicProfileViewList'
+
+    PublicProfileResult:
+      type: object
+      description: 单用户公开资料查询的成功响应体。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/PublicProfileView'
 
     ErrorResponse:
       type: object
