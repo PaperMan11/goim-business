@@ -49,10 +49,11 @@ func NewNickname(raw, loginName string) (string, error) {
 	return nickname, nil
 }
 
-// NewDeviceID 校验设备标识非空。
+// NewDeviceID 校验设备标识：非空且最长 64 个字符。
 func NewDeviceID(raw string) (string, error) {
-	if raw == "" {
+	id := strings.TrimSpace(raw)
+	if id == "" || utf8.RuneCountInString(id) > 64 {
 		return "", ErrInvalidDeviceID
 	}
-	return raw, nil
+	return id, nil
 }

@@ -3,10 +3,10 @@ info:
   title: goim-business API
   version: 1.0.0
   description: |
-    goim-business 账号域、IM 凭证与用户资料的 OpenAPI 契约，只描述当前已注册的 14 个 operation（13 条路径）。
+    goim-business 账号域、IM 凭证、用户资料、设备与客户端配置的 OpenAPI 契约，只描述当前已注册的 18 个 operation（17 条路径）。
 
-    **统一响应约定**：所有接口的 HTTP 状态码恒为 200，业务结果一律由响应体 `code` 判断：
-    `0` 表示成功，非 `0` 为业务错误码，错误提示见 `msg`，`data` 可能为空或携带明细。
+    **统一响应约定**：除 `GET /client-config` 命中 ETag 时返回 304 外，所有接口的 HTTP 状态码恒为 200，
+    业务结果一律由响应体 `code` 判断：`0` 表示成功，非 `0` 为业务错误码，错误提示见 `msg`，`data` 可能为空或携带明细。
     因此成功与业务错误共用同一个 `200` 响应，客户端不要依赖 HTTP 状态码做分支。
 
     **鉴权**：需要登录态的接口携带 `Authorization: Bearer <access token>`；
@@ -23,6 +23,10 @@ tags:
     description: IM token 兑换、开通状态查询与手动重试
   - name: Profile
     description: 本人资料读写、公开资料批量查询与单用户查询
+  - name: Device
+    description: 我的设备列表与移除设备（设备随登录/注册自动登记）
+  - name: ClientConfig
+    description: 客户端启动配置、ETag 缓存与配置项元数据
 
 servers:
   - url: /api/v1
@@ -35,10 +39,13 @@ paths:
       summary: 注册账号
       description: |
         注册成功即签发 access token / refresh token 并创建当前会话。
+        设备标识与客户端版本通过请求头传入（X-Device-Id 必填、X-Client-Version 可选），并在同一事务内登记设备。
         公开接口，受 IP 维度限流保护（默认 3 次/小时）。
         错误码：1001 参数错误、2001 账号已存在、1029 请求过于频繁、9001 服务内部错误、9002 依赖服务不可用。
       parameters:
         - $ref: '#/components/parameters/XClientPlatform'
+        - $ref: '#/components/parameters/XDeviceID'
+        - $ref: '#/components/parameters/XClientVersion'
       requestBody:
         required: true
         content:
@@ -56,11 +63,14 @@ paths:
       summary: 登录
       description: |
         校验账号密码，成功后签发 access token / refresh token 并创建新会话。
+        设备标识与客户端版本通过请求头传入（X-Device-Id 必填、X-Client-Version 可选），登录成功会在同一事务内登记设备。
         公开接口，受 IP 维度限流保护（默认 5 次/分钟）；登录失败次数超阈值同样返回 1029。
         错误码：1001 参数错误、2002 账号或密码错误、2003 账号已被冻结、1029 请求过于频繁、
         9001 服务内部错误、9002 依赖服务不可用。
       parameters:
         - $ref: '#/components/parameters/XClientPlatform'
+        - $ref: '#/components/parameters/XDeviceID'
+        - $ref: '#/components/parameters/XClientVersion'
       requestBody:
         required: true
         content:
@@ -288,6 +298,78 @@ paths:
         '200':
           $ref: '#/components/responses/PublicProfileOK'
 
+  /devices:
+    get:
+      tags: [Device]
+      operationId: listDevices
+      summary: 我的设备列表
+      description: |
+        设备随注册/登录自动登记；返回当前用户已登记设备，按最近活跃时间倒序，不含推送 token。
+        错误码：1002 未认证或登录态已失效、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          $ref: '#/components/responses/DeviceListOK'
+
+  /devices/{deviceId}:
+    delete:
+      tags: [Device]
+      operationId: removeDevice
+      summary: 移除设备
+      description: |
+        删除设备记录并撤销该设备的全部活跃会话；设备与同名设备会话都不存在时返回 1004。
+        错误码：1001 参数错误、1002 未认证或登录态已失效、1004 资源不存在、
+        9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: deviceId
+          in: path
+          required: true
+          description: 客户端上报的设备标识，1-64 个字符。
+          schema:
+            type: string
+          example: web-device-001
+      responses:
+        '200':
+          $ref: '#/components/responses/EmptyOK'
+
+  /client-config:
+    get:
+      tags: [ClientConfig]
+      operationId: getClientConfig
+      summary: 获取客户端配置
+      description: |
+        公开接口。按 platform 读取配置（缺省 Web=5，取值同 X-Client-Platform），
+        返回 configVersion 与 ETag；携带 If-None-Match 且命中时返回 304 且无响应体。
+        配置表缺失时回退内置默认值。
+        错误码：1001 参数错误、9001 服务内部错误、9002 依赖服务不可用（仍为 HTTP 200）。
+      parameters:
+        - name: platform
+          in: query
+          required: false
+          description: 客户端平台，支持 ios / android / windows / macos / web / harmony 或数字 1/2/3/4/5/11；缺省 web。
+          schema:
+            type: string
+            default: web
+          example: 5
+      responses:
+        '200':
+          $ref: '#/components/responses/ClientConfigOK'
+        '304':
+          $ref: '#/components/responses/NotModified'
+
+  /client-config/schema:
+    get:
+      tags: [ClientConfig]
+      operationId: getClientConfigSchema
+      summary: 配置项元数据
+      description: 返回可配置项的类型、默认值与适用范围，供客户端渲染设置页与校验输入。
+      responses:
+        '200':
+          $ref: '#/components/responses/ClientConfigSchemaOK'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -310,6 +392,27 @@ components:
         enum: ["ios", "android", "windows", "macos", "web", "harmony", "1", "2", "3", "4", "5", "11"]
         default: web
         example: web
+
+    XDeviceID:
+      name: X-Device-Id
+      in: header
+      required: true
+      description: 客户端设备标识，1-64 个字符；登录/注册必填，缺失或超长返回 1001。
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
+      example: web-device-001
+
+    XClientVersion:
+      name: X-Client-Version
+      in: header
+      required: false
+      description: 客户端版本号，最长 32 个字符；可选，仅用于设备登记与观测，缺失按空值处理。
+      schema:
+        type: string
+        maxLength: 32
+      example: 1.0.0
 
   headers:
     XRequestID:
@@ -432,11 +535,69 @@ components:
               - $ref: '#/components/schemas/PublicProfileResult'
               - $ref: '#/components/schemas/ErrorResponse'
 
+    DeviceListOK:
+      description: |
+        成功时 data 为 DeviceView 数组（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/DeviceListResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    ClientConfigOK:
+      description: |
+        成功时 data 为 ClientConfigResponse（code=0），并返回 ETag；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+        ETag:
+          description: 当前配置的强 ETag，格式为 "cfg-<platform>-<version>"。
+          schema:
+            type: string
+          example: '"cfg-5-1"'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/ClientConfigResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    ClientConfigSchemaOK:
+      description: |
+        成功时 data 为 ClientConfigSchemaResponse（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/ClientConfigSchemaResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    NotModified:
+      description: If-None-Match 命中当前 ETag，配置未变化，响应无 body。
+      headers:
+        ETag:
+          description: 当前配置的强 ETag。
+          schema:
+            type: string
+          example: '"cfg-5-1"'
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+
   schemas:
     RegisterRequest:
       type: object
-      description: 注册请求。
-      required: [loginName, password, deviceId]
+      description: 注册请求；设备标识与版本通过 X-Device-Id / X-Client-Version 请求头传入。
+      required: [loginName, password]
       properties:
         loginName:
           type: string
@@ -455,21 +616,15 @@ components:
           description: 昵称；最长 64 个字符，为空时回退为登录名。
           maxLength: 64
           example: Alice
-        deviceId:
-          type: string
-          description: 设备标识，非空。
-          maxLength: 64
-          example: web-device-001
       example:
         loginName: alice
         password: Passw0rd!
         nickname: Alice
-        deviceId: web-device-001
 
     LoginRequest:
       type: object
-      description: 登录请求。
-      required: [loginName, password, deviceId]
+      description: 登录请求；设备标识与版本通过 X-Device-Id / X-Client-Version 请求头传入。
+      required: [loginName, password]
       properties:
         loginName:
           type: string
@@ -481,15 +636,9 @@ components:
           description: 明文密码。
           maxLength: 64
           example: Passw0rd!
-        deviceId:
-          type: string
-          description: 设备标识，非空。
-          maxLength: 64
-          example: web-device-001
       example:
         loginName: alice
         password: Passw0rd!
-        deviceId: web-device-001
 
     RefreshRequest:
       type: object
@@ -910,6 +1059,169 @@ components:
           example: success
         data:
           $ref: '#/components/schemas/PublicProfileView'
+
+    DeviceView:
+      type: object
+      description: 对外暴露的设备信息，不含推送 token。
+      required: [deviceId, platform, appVersion, lastActiveAt]
+      properties:
+        deviceId:
+          type: string
+          example: web-device-001
+        platform:
+          type: integer
+          format: int32
+          description: 平台 ID：iOS=1、Android=2、Windows=3、macOS=4、Web=5、HarmonyOS=11。
+          enum: [1, 2, 3, 4, 5, 11]
+          example: 5
+        appVersion:
+          type: string
+          example: 1.2.0
+        lastActiveAt:
+          type: string
+          format: date-time
+          example: "2026-11-17T10:00:00+08:00"
+
+    DeviceViewList:
+      type: array
+      description: 设备列表。
+      items:
+        $ref: '#/components/schemas/DeviceView'
+
+    DeviceListResult:
+      type: object
+      description: 设备列表查询的成功响应体。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/DeviceViewList'
+
+    ClientConfigResponse:
+      type: object
+      description: 客户端启动配置。
+      required: [configVersion, features, im, limits, minAppVersion]
+      properties:
+        configVersion:
+          type: integer
+          format: int32
+          description: 配置版本；版本变化后旧 ETag 不再命中。
+          example: 1
+        features:
+          type: object
+          description: 功能开关。
+          additionalProperties:
+            type: boolean
+          example:
+            voiceMessage: false
+            fileUpload: true
+        im:
+          $ref: '#/components/schemas/ClientConfigIM'
+        limits:
+          type: object
+          description: 客户端限制值。
+          additionalProperties:
+            type: integer
+            format: int64
+          example:
+            maxUploadBytes: 104857600
+            maxAvatarBytes: 5242880
+        minAppVersion:
+          type: object
+          description: 各端最低版本要求。
+          additionalProperties:
+            type: string
+          example:
+            web: 1.0.0
+            desktop: 1.0.0
+
+    ClientConfigIM:
+      type: object
+      description: 配置中与 IM 连接相关的运行期信息。
+      required: [apiBaseUrl, wsUrl, platformId]
+      properties:
+        apiBaseUrl:
+          type: string
+          description: 客户端访问 IM HTTP 接口的根地址；IM 未配置时为空字符串。
+          example: "https://im.example.com/api/v1"
+        wsUrl:
+          type: string
+          description: IM WebSocket 地址；未配置时为空字符串。
+          example: "wss://im.example.com/ws"
+        platformId:
+          type: integer
+          format: int32
+          description: 请求时使用的平台 ID。
+          enum: [1, 2, 3, 4, 5, 11]
+          example: 5
+
+    ClientConfigSchemaResponse:
+      type: object
+      description: 配置项元数据。
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClientConfigItemSchema'
+
+    ClientConfigItemSchema:
+      type: object
+      description: 单个配置项的类型、默认值与适用范围。
+      required: [key, type, scope]
+      properties:
+        key:
+          type: string
+          description: 配置项路径，如 features.fileUpload。
+          example: features.fileUpload
+        type:
+          type: string
+          description: 值类型：bool / int64 / string。
+          enum: [bool, int64, string]
+          example: bool
+        default:
+          description: 默认值，类型由 type 决定（布尔、整数或字符串）。
+          example: true
+        scope:
+          type: string
+          description: 适用范围：all / web / desktop / runtime。
+          example: all
+
+    ClientConfigResult:
+      type: object
+      description: 客户端配置查询的成功响应体。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/ClientConfigResponse'
+
+    ClientConfigSchemaResult:
+      type: object
+      description: 配置项元数据的成功响应体。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/ClientConfigSchemaResponse'
 
     ErrorResponse:
       type: object

@@ -26,7 +26,12 @@ var validPlatforms = map[int8]struct{}{
 
 // PlatformFrom 读取 X-Client-Platform；缺省按 Web，非法取值直接拒绝。
 func PlatformFrom(c *gin.Context) (int8, error) {
-	raw := strings.TrimSpace(strings.ToLower(c.GetHeader("X-Client-Platform")))
+	return PlatformFromValue(c.GetHeader("X-Client-Platform"))
+}
+
+// PlatformFromValue 解析平台标识（字符串或数字）；空值按 Web 处理。
+func PlatformFromValue(raw string) (int8, error) {
+	raw = strings.TrimSpace(strings.ToLower(raw))
 	if raw == "" {
 		return PlatformWeb, nil
 	}

@@ -46,6 +46,7 @@ type testEnv struct {
 	users       *fakeUsers
 	creds       *fakeCreds
 	sessions    *fakeSessions
+	devices     *fakeDevices
 	cache       *fakeCache
 	provisioner *fakeProvisioner
 	imTokens    *fakeIMTokenCache
@@ -59,6 +60,7 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 	users := newFakeUsers()
 	creds := newFakeCreds()
 	sessions := newFakeSessions()
+	devices := newFakeDevices()
 	cache := newFakeCache()
 	provisioner := newFakeProvisioner(false)
 	imTokens := newFakeIMTokenCache()
@@ -79,7 +81,7 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 	issuer := token.NewIssuer("test-secret-0123456789", "goim-business", "goim-business-api", cfg.AccessTTL)
 	clock := &testClock{base: time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)}
 	imSync := imjob.NewWorker(users, provisioner, outbox, 20, clock.Now, zap.NewNop().Sugar())
-	svc := NewService(users, creds, sessions, fakeTx{}, cache, cache, provisioner, imTokens, outbox, imSync, issuer, cfg, zap.NewNop().Sugar())
+	svc := NewService(users, creds, sessions, devices, fakeTx{}, cache, cache, provisioner, imTokens, outbox, imSync, issuer, cfg, zap.NewNop().Sugar())
 
 	svc.now = clock.Now
 
@@ -88,6 +90,7 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 		users:       users,
 		creds:       creds,
 		sessions:    sessions,
+		devices:     devices,
 		cache:       cache,
 		provisioner: provisioner,
 		imTokens:    imTokens,
@@ -783,6 +786,21 @@ func (f *fakeSessions) RevokeFamily(_ context.Context, familyID string, at time.
 	return sids, nil
 }
 
+func (f *fakeSessions) RevokeByDevice(_ context.Context, userID int64, deviceID string, at time.Time) ([]int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var sids []int64
+	for _, session := range f.list {
+		if session.UserID != userID || session.DeviceID != deviceID || session.RevokedAt != nil || session.RotatedAt != nil {
+			continue
+		}
+		value := at
+		session.RevokedAt = &value
+		sids = append(sids, session.ID)
+	}
+	return sids, nil
+}
+
 func (f *fakeSessions) ListActive(_ context.Context, userID int64, at time.Time) ([]*domain.Session, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -895,4 +913,75 @@ func (f *fakeCache) clearFailures(loginName string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.failures, loginName)
+}
+
+type fakeDevices struct {
+	mu    sync.Mutex
+	items map[string]*domain.Device
+}
+
+func newFakeDevices() *fakeDevices {
+	return &fakeDevices{items: make(map[string]*domain.Device)}
+}
+
+func deviceKey(userID int64, deviceID string) string {
+	return strconv.FormatInt(userID, 10) + "/" + deviceID
+}
+
+func (f *fakeDevices) Upsert(_ context.Context, device *domain.Device) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := deviceKey(device.UserID, device.DeviceID)
+	clone := *device
+	if existing, ok := f.items[key]; ok {
+		clone.ID = existing.ID
+		clone.CreatedAt = existing.CreatedAt
+	}
+	f.items[key] = &clone
+	return nil
+}
+
+func (f *fakeDevices) ListByUser(_ context.Context, userID int64) ([]*domain.Device, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*domain.Device
+	for _, device := range f.items {
+		if device.UserID != userID {
+			continue
+		}
+		clone := *device
+		out = append(out, &clone)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].LastActiveAt.After(out[j].LastActiveAt)
+	})
+	return out, nil
+}
+
+func (f *fakeDevices) Delete(_ context.Context, userID int64, deviceID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := deviceKey(userID, deviceID)
+	if _, ok := f.items[key]; !ok {
+		return false, nil
+	}
+	delete(f.items, key)
+	return true, nil
+}
+
+func (f *fakeDevices) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.items)
+}
+
+func (f *fakeDevices) get(userID int64, deviceID string) (*domain.Device, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	device, ok := f.items[deviceKey(userID, deviceID)]
+	if !ok {
+		return nil, false
+	}
+	clone := *device
+	return &clone, true
 }

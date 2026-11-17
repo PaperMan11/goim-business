@@ -34,8 +34,8 @@
 | 交付 | ✅ 已实现 | Makefile、Dockerfile、compose、GitHub Actions、migrations + `cmd/{api,migrate,cron}` |
 | IM 凭证兑换 / 账号开通 | ✅ 已实现 | `internal/client/goim`、`internal/handler/account`（IM handler）、`internal/cache/im_token_cache.go`；IM 开通 outbox 补偿 ✅；资料同步 `profile_sync` ✅ |
 | 用户资料 | ✅ 最小闭环 | `/profile` 路由 + `profile_sync` outbox；头像仅存 `avatar_key`，预签名 URL/上传待 M4 |
-| 设备 | ⏳ 规划中 | 无 `devices` 表与路由 |
-| 客户端配置 | ⏳ 规划中 | 无配置表、无 `/client-config` 路由 |
+| 设备 | ✅ 已实现 | `account_devices` 表随注册/登录自动登记；`/devices` 列表与移除（移除同时撤销该设备会话） |
+| 客户端配置 | ✅ 已实现 | `client_configs` 表 + `/client-config`、`/client-config/schema`；版本化 ETag 与 304 |
 | 文件 | ⏳ 规划中 | 无 RustFS client、无 `/files` 路由 |
 | 通知 / 推送 | ⏳ 规划中 | 无 `notifications` 表、无投递逻辑 |
 | 管理端 / OAuth | ⏳ 规划中 | 无管理端路由与角色体系 |
@@ -51,8 +51,8 @@
 | IM 凭证兑换 | `POST /api/v1/im/token`，服务端缓存 admin token 并向 goim 换取 user token | 不解决这一条，前端就只能继续内置 adminSecret，属于阻塞项 | ✅ 已实现（含 Web 客户端 `loginWithToken` 接入） |
 | IM 账号开通 | 注册后同步调用 goim `/user/user_register`，失败进入 outbox 补偿，也可通过 `/im/retry` 手动重试 | 没有 IM user 投影，资料/会话/推送都查不到人 | ✅ 已实现（开通 outbox ✅；资料变更同步 ✅） |
 | 用户资料（最小） | 昵称、头像 fileId、bio；MySQL 为事实源，goim 为投影 | 聊天界面必须显示昵称/头像 | ✅ 已实现（头像上传/预签名 URL 待 M4） |
-| 设备注册 | deviceID、平台、版本、最后活跃；支撑多端会话与踢出 | 多端登录是 Web + 桌面的现实场景 | ⏳ 规划中（会话层面已记录 deviceID） |
-| 客户端配置 | IM 地址、平台映射、上传限制、功能开关；版本 + ETag | 客户端换环境/开关不能靠重新发版 | ⏳ 规划中 |
+| 设备注册 | deviceID、平台、版本、最后活跃；支撑多端会话与踢出 | 多端登录是 Web + 桌面的现实场景 | ✅ 已实现（`account_devices`，移除设备即踢出该设备会话） |
+| 客户端配置 | IM 地址、平台映射、上传限制、功能开关；版本 + ETag | 客户端换环境/开关不能靠重新发版 | ✅ 已实现（`client_configs` + ETag/304；配置表缺失回退内置默认值） |
 | 文件（仅头像） | 复用 RustFS：预签名 PUT + complete 校验 + 现签 GET | 头像上传是资料闭环的一部分；聊天附件继续走 goim `/third/*` | ⏳ 规划中 |
 | 可观测与交付 | 日志、request_id、Prometheus、健康检查、迁移、单测、compose、CI、镜像、优雅启停 | 上线门槛，不属于业务功能但不能省 | ✅ 已实现（详见 §4.11~§4.13） |
 
@@ -458,7 +458,7 @@ refresh 规则（✅ 已实现）：
 | Web | 5 |
 | HarmonyOS | 11 |
 
-`internal/pkg/httpx/platform.go` 读取 `X-Client-Platform`（大小写不敏感），支持 `ios/android/windows|win/macos|mac|osx/web|browser/harmony|harmonyos` 以及数字编码；缺省为 Web(5)，非法值返回 `1001`。平台值在注册/登录时写入会话与 access JWT，后续不允许客户端改写会话平台。
+`internal/pkg/httpx/platform.go` 读取 `X-Client-Platform`（大小写不敏感），支持 `ios/android/windows|win/macos|mac|osx/web|browser/harmony|harmonyos` 以及数字编码；缺省为 Web(5)，非法值返回 `1001`。平台值在注册/登录时写入会话与 access JWT，后续不允许客户端改写会话平台。设备标识与版本分别由 `httpx/client_meta.go` 的 `DeviceIDFrom`（`X-Device-Id` 必填、1-64 字符）与 `ClientVersionFrom`（`X-Client-Version` 可选、≤32 字符）解析；`User-Agent` 直接取标准请求头。
 
 ### 4.6 参数校验与统一错误码（✅ 已实现）
 
@@ -524,7 +524,7 @@ refresh 规则（✅ 已实现）：
 
 **结论：原计划 OpenAPI 3 设计先行（`api/openapi.yaml`）+ `oapi-codegen` 生成 gin 路由与 DTO。**
 
-当前已在 `api/openapi.yaml` 落地账号域 7 个接口、IM 域 3 个接口与资料域 4 个 operation（3 条路径）的 OpenAPI 3.0.3 契约（路由、DTO、统一响应、错误码与鉴权均按现有实现描述），并由 `api/openapi_test.go` 做守护测试；仍不引入 Swagger UI 与代码生成，`go.mod` 也没有 `oapi-codegen`/`kin-openapi` 依赖。后续全量契约的落地流程保持不变：
+当前已在 `api/openapi.yaml` 落地账号域 7 个接口、IM 域 3 个接口、资料域 4 个 operation（3 条路径）、设备域 2 个接口与客户端配置 2 个接口的 OpenAPI 3.0.3 契约（路由、DTO、统一响应、错误码与鉴权均按现有实现描述），并由 `api/openapi_test.go` 做守护测试；仍不引入 Swagger UI 与代码生成，`go.mod` 也没有 `oapi-codegen`/`kin-openapi` 依赖。后续全量契约的落地流程保持不变：
 
 1. 先改 `api/openapi.yaml`，PR 中评审契约；只写已实现 operation。
 2. `go generate ./...` 重新生成 handler 绑定代码。
@@ -701,9 +701,12 @@ goim-business/
 ├── migrations/
 │   ├── 000001_init.up.sql          # account_users / account_credentials / account_sessions
 │   ├── 000001_init.down.sql
+│   ├── 000002_outbox_events.up.sql # 通用 outbox 任务表（+ down）
+│   ├── 000003_account_devices.up.sql # 设备登记表（+ down）
+│   ├── 000004_client_configs.up.sql  # 客户端配置表（+ down）
 │   └── embed.go                    # embed.FS
 ├── api/
-│   ├── openapi.yaml                # 账号域最小 OpenAPI 3.0.3 契约
+│   ├── openapi.yaml                # 账号/IM/资料/设备/配置最小 OpenAPI 3.0.3 契约
 │   └── openapi_test.go             # 契约守护测试
 ├── internal/
 │   ├── app/app.go                  # 手写组合根 NewApp / Close
@@ -715,17 +718,22 @@ goim-business/
 │   ├── domain/account/             # 实体、值对象、策略、错误、聚合仓储端口
 │   │   ├── user.go
 │   │   ├── credential.go
+│   │   ├── device.go               # 设备登记实体与校验
 │   │   ├── session.go
 │   │   ├── repository.go
 │   │   ├── policy.go
 │   │   ├── value_object.go
 │   │   └── errors.go
+│   ├── domain/clientconfig/        # 客户端配置实体与仓储端口
 │   ├── handler/
 │   │   ├── routes.go               # gin.New + 全局中间件 + /api/v1
-│   │   └── account/
-│   │       ├── routes.go           # 账号与 IM 凭证路由注册
-│   │       ├── account.go          # 7 个账号 handler
-│   │       └── im.go               # 3 个 IM 凭证 handler
+│   │   ├── account/
+│   │   │   ├── routes.go           # 账号、IM、资料与设备路由注册
+│   │   │   ├── account.go          # 7 个账号 handler
+│   │   │   ├── im.go               # 3 个 IM 凭证 handler
+│   │   │   ├── profile.go          # 4 个资料 handler
+│   │   │   └── device.go           # 2 个设备 handler（列表/移除）
+│   │   └── clientconfig/           # 客户端配置 handler 与路由
 │   ├── middlewares/
 │   │   ├── auth.go                 # Bearer access JWT + Redis 活跃标记
 │   │   ├── context.go              # gin.Context 键与读取函数
@@ -737,12 +745,13 @@ goim-business/
 │   │   └── requestid.go            # X-Request-ID / operationID / UUIDv7
 │   ├── job/im/                     # ✅ IM 开通与 outbox 补偿 worker
 │   ├── model/account.go            # gorm 持久化记录（account_* 表）
+│   ├── model/clientconfig.go       # client_configs 表模型
 │   ├── model/outbox.go             # outbox_events 表模型（通用，不属于业务域）
 │   ├── pkg/                        # 无业务语义基础设施
 │   │   ├── convert/                # 类型转换
 │   │   ├── errcode/                # 错误码注册表
 │   │   ├── hashx/                  # SHA-256 等
-│   │   ├── httpx/                  # BindJSON、X-Client-Platform 解析
+│   │   ├── httpx/                  # BindJSON、X-Client-Platform / X-Device-Id / X-Client-Version 解析
 │   │   ├── idgen/                  # UUIDv7
 │   │   ├── lock/                   # 分布式锁接口
 │   │   │   └── redis/              # Redis 锁实现（带 TTL 与重试策略）
@@ -758,12 +767,14 @@ goim-business/
 │   ├── repository/
 │   │   ├── db.go                   # gorm 连接/连接池/Ping
 │   │   ├── tx.go                   # TxManager + DBFromContext
-│   │   ├── account/                # user/credential/session 仓储实现
+│   │   ├── account/                # user/credential/session/device 仓储实现
+│   │   ├── clientconfig/           # client_configs 仓储实现
 │   │   └── outbox/                 # outbox_events 仓储实现（通用）
 │   ├── service/
-│   │   ├── account/                # 注册/登录/刷新/会话/改密 + 单测
+│   │   ├── account/                # 注册/登录/刷新/会话/改密/资料/设备 + 单测
+│   │   ├── clientconfig/           # 配置读取、默认值回退与 ETag + 单测
 │   │   └── ports/                  # 基础设施端口：session/login/tx/im/outbox 按用途分文件
-│   └── types/account.go            # 请求/响应契约
+│   └── types/                      # account.go / clientconfig.go 请求与响应契约
 ├── deploy/compose.dev.yaml         # MySQL 8.4 + Redis 7
 ├── docs/DEVELOPMENT.md             # 本文
 ├── .github/workflows/ci.yml
@@ -787,8 +798,8 @@ goim-business/
 6. `CORS`：按白名单回显 Origin；OPTIONS 直接 204。
 7. `MaxBytesReader`：按 `server.max_body_bytes` 限制请求体。
 8. 进入 `/api/v1/account` 组，命中 `RateLimit.Login()`：以 `c.ClientIP()` 为键做 Redis 固定窗口计数；失败关闭。
-9. `httpx.BindJSON` 绑定 `types.LoginRequest`（`loginName/password/deviceId`），`httpx.PlatformFrom` 解析 `X-Client-Platform`（缺省 Web），补充 `UserAgent/IP/Platform`。
-10. `AccountService.Login`：读取登录失败计数 → 查用户/凭证 → argon2id 校验 → 清零失败计数 → 事务内更新 `last_login_at` 并创建会话 → 会话上限踢出 → 签发 access/refresh → 写 Redis 活跃标记。
+9. `httpx.BindJSON` 绑定 `types.LoginRequest`（`loginName/password`）；`httpx.PlatformFrom` 解析 `X-Client-Platform`（缺省 Web），`httpx.DeviceIDFrom` 解析必填的 `X-Device-Id`，`httpx.ClientVersionFrom` 解析可选的 `X-Client-Version`，并补充标准 `User-Agent`、`IP`。
+10. `AccountService.Login`：读取登录失败计数 → 查用户/凭证 → argon2id 校验 → 清零失败计数 → 事务内更新 `last_login_at`、创建会话并 upsert `account_devices`（设备随登录自动登记）→ 会话上限踢出 → 签发 access/refresh → 写 Redis 活跃标记。
 11. `response.OK` 输出 HTTP 200 + `{code:0,msg:"success",data:{user,token,refreshToken,refreshExpiresIn,sessionId,platform}}`；请求返回时由 Metrics 与 AccessLog 收尾。
 
 认证请求（如 `POST /api/v1/account/logout`）在路由组内额外经过 `Authenticator`：验签 → 校验 Redis `sess:active:{sid}` → 注入用户/会话上下文。
@@ -804,11 +815,11 @@ goim-business/
 ├── internal/
 │   ├── app/
 │   ├── config/
-│   ├── domain/{account,profile,device,file,clientconfig}/   # profile 并入 account（✅）；其余域 ⏳
-│   ├── handler/{account,profile,device,file,clientconfig,notification,admin,internal}/
+│   ├── domain/{account,file,clientconfig}/   # account 含 profile/device（✅）；clientconfig ✅；file ⏳
+│   ├── handler/{account,clientconfig,file,notification,admin,internal}/   # account/clientconfig ✅
 │   ├── middlewares/                # 现有目录；未来增加 adminauth.go、idempotency.go
-│   ├── service/{account,profile,device,file,clientconfig,notification,admin}/   # account 内含 im_outbox.go、profile.go（✅）
-│   ├── repository/{account,profile,device,file,config,notification,audit}/     # account 内含 outbox.go（✅）
+│   ├── service/{account,clientconfig,file,notification,admin}/   # account 含 im_outbox.go、profile.go、device.go（✅）；clientconfig ✅
+│   ├── repository/{account,clientconfig,file,notification,audit}/   # account 含 device.go、outbox 在独立包（✅）；clientconfig ✅
 │   ├── client/{goim,storage}/      # ✅ goim HTTP；⏳ RustFS 预签名
 │   ├── job/{im,file_cleanup,scheduler}/  # im ✅；其余 ⏳
 │   ├── model/、types/、pkg/
@@ -1026,12 +1037,14 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 
 实现标记：**✅ 已注册路由**、**⏳ 规划中（未注册路由）**、**❌ 不做（委托 goim 或不实现）**。
 
+前端接入的设备标识、请求头与示例见 [FRONTEND_INTEGRATION.md](./FRONTEND_INTEGRATION.md)。
+
 ### 8.1 账号 `/account`（✅ 已实现）
 
 | 方法 | 路径 | 鉴权 | 说明 | 状态 |
 |---|---|---|---|---|
-| POST | `/account/register` | 🔓 | 注册（登录名+密码+deviceId），成功后直接返回令牌与会话信息 | ✅ |
-| POST | `/account/login` | 🔓 | 登录，按 `X-Client-Platform` 建会话 | ✅ |
+| POST | `/account/register` | 🔓 | 注册（登录名+密码；设备标识走 `X-Device-Id` 头），成功后直接返回令牌与会话信息 | ✅ |
+| POST | `/account/login` | 🔓 | 登录，按 `X-Client-Platform` 建会话，`X-Device-Id` 必填 | ✅ |
 | POST | `/account/refresh` | 🔓(refresh) | 轮换 refresh，返回新 access + 新 refresh | ✅ |
 | POST | `/account/logout` | 🔐 | 撤销当前会话 | ✅ |
 | GET | `/account/sessions` | 🔐 | 当前用户活跃会话列表 | ✅ |
@@ -1042,8 +1055,8 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 `POST /account/login` 实际请求/响应（`types.LoginRequest` / `types.AuthResp`）：
 
 ```json
-// request（Header: X-Client-Platform: web 可省略，默认 5）
-{ "loginName": "alice", "password": "••••••", "deviceId": "web-abc" }
+// request（Header: X-Device-Id 必填；X-Client-Platform 可省略，默认 web；X-Client-Version 可选）
+{ "loginName": "alice", "password": "••••••" }
 // response（HTTP 200）
 {
   "code": 0,
@@ -1082,20 +1095,23 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 | GET | `/profile/users/{userId}` | 🔐 | 单个公开资料，不存在返回 1004 | ✅ |
 | PUT | `/profile/me/extended` | 🔐 | 扩展字段（地区/性别/签名/自定义 JSON） | ⏳ |
 
-### 8.4 设备 `/devices`（⏳ 规划中，未注册路由）
+### 8.4 设备 `/devices`（✅ 已实现）
 
 | 方法 | 路径 | 鉴权 | 说明 | 状态 |
 |---|---|---|---|---|
-| POST | `/devices/register` | 🔐 | 注册/更新设备、推送 token | ⏳ |
-| GET | `/devices` | 🔐 | 我的设备列表 | ⏳ |
-| DELETE | `/devices/{deviceId}` | 🔐 | 移除设备并撤销其会话 | ⏳ |
+| GET | `/devices` | 🔐 | 我的设备列表（按最近活跃时间倒序，不含推送 token） | ✅ |
+| DELETE | `/devices/{deviceId}` | 🔐 | 移除设备并撤销该设备的全部活跃会话 | ✅ |
 
-### 8.5 客户端配置 `/client-config`（⏳ 规划中，未注册路由）
+设备登记落在 `account_devices`，以 `(user_id, device_id)` 为唯一键；注册与登录成功都会在同一事务内自动 upsert 当前设备（`X-Device-Id` 必填，`X-Client-Version` 可选），因此不提供独立注册接口。重复登录覆盖平台/版本，保留首次注册时间。移除设备与撤销会话在同一事务内完成，提交后清理 Redis 活跃标记。
+
+### 8.5 客户端配置 `/client-config`（✅ 已实现）
 
 | 方法 | 路径 | 鉴权 | 说明 | 状态 |
 |---|---|---|---|---|
-| GET | `/client-config?platform=5&appVersion=1.0.0` | 🔓 | 返回配置 + `ETag`/`configVersion`；304 支持 | ⏳ |
-| GET | `/client-config/schema` | 🔓 | 配置项元数据（类型/默认值/适用范围） | ⏳ |
+| GET | `/client-config?platform=5&appVersion=1.0.0` | 🔓 | 返回配置 + `ETag`/`configVersion`；304 支持 | ✅ |
+| GET | `/client-config/schema` | 🔓 | 配置项元数据（类型/默认值/适用范围） | ✅ |
+
+配置存放在 `client_configs`：`platform=0` 为全平台默认，具体平台行覆盖默认值；`version` 递增后 ETag 失效。读取时优先匹配平台行，缺失回退 `platform=0`，表中完全没有记录时回退代码内置默认值。ETag 格式为 `"cfg-<platform>-<version>"`，`If-None-Match` 命中返回 304 且无 body。当前未提供管理端写接口，配置调整通过运营 SQL（递增 `version`）完成。
 
 响应示例：
 
@@ -1205,13 +1221,13 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 当前实际流程：
 
 ```
-client → POST /api/v1/account/register（X-Client-Platform 可选）
+client → POST /api/v1/account/register（X-Client-Platform 可选；X-Device-Id 必填；X-Client-Version 可选）
   handler:
-    1. BindJSON + PlatformFrom + 注入 UserAgent/IP
+    1. BindJSON + PlatformFrom + DeviceIDFrom + ClientVersionFrom + 注入标准 User-Agent/IP
   service:
     2. 校验登录名/密码/昵称/deviceId
     3. argon2id 计算密码哈希
-    4. 事务：INSERT account_users → INSERT account_credentials → INSERT outbox_events(provision_im) → 创建会话（签发 access/refresh）
+    4. 事务：INSERT account_users → INSERT account_credentials → INSERT outbox_events(provision_im) → 创建会话（签发 access/refresh）→ upsert account_devices
     5. 会话上限检查（踢出旧会话）
     6. 写 Redis sess:active:{sid}
   response: {code:0,data:{user,token,refreshToken,...,sessionId,platform}}
@@ -1325,17 +1341,18 @@ POST /admin/announcements
 - 代码层验收：`npm run build` 通过；产物中不存在 admin secret 值或相关环境变量，仅保留 SDK 可选的 `adminSecret` 空字段名（应用初始化从不赋值）。✅
 - 运行时验收 ⏳：本机无 Docker，goim 联调地址 `192.168.241.128:18880/50001` 当前不可达，待联调环境恢复后补测“业务账号登录 → 收发消息 → 拉历史 → token 自动续期”。
 
-### M3 资料 / 设备 / 客户端配置（资料最小闭环 ✅；设备与客户端配置 ⏳）
+### M3 资料 / 设备 / 客户端配置（✅ 代码闭环；联调验收待环境）
 
 - `/profile`（最小）：✅ `GET/PUT /profile/me`、`POST /profile/batch`、`GET /profile/users/{userId}`；资料以 MySQL 为事实源，更新事务内写 `profile_sync` outbox，提交后即时同步 goim，失败按退避补偿；IM 账号未开通时由 worker 等待开通完成后再同步。头像当前只存 `avatar_key`，URL 仅当本身是 `http(s)` 地址时才作为 faceURL 下发。
-- `/devices`、`/client-config`（ETag/版本）：⏳ 未开始。
-- 验收：改昵称/头像后另一客户端可见 ⏳ 待联调环境；配置版本递增、304 生效、设备列表可踢出 ⏳ 未开始。
+- `/devices`：✅ `account_devices` + `GET /devices`、`DELETE /devices/{deviceId}`；设备随注册/登录自动登记，移除设备同时撤销该设备全部会话并清理 Redis 活跃标记。
+- `/client-config`：✅ `client_configs` + `GET /client-config`（版本化 ETag、304）、`GET /client-config/schema`；配置表缺失回退内置默认值。
+- 验收：配置版本递增、304 生效、设备列表可踢出已由单测覆盖；改昵称/头像后另一客户端可见 ⏳ 待联调环境。
 
 ### M4 文件（仅头像）+ 首版发布门禁（⏳ 未开始）
 
 - RustFS 预签名、complete 校验、访问 URL、头像配额、孤儿清理。
 - 验收：头像全链路；超大/非法类型被拒；未 complete 的对象 24h 清理。
-- **首版门禁**：M0-M4 全部通过、Web 端完成 token 改造、压测与回滚演练通过后即可发布；B 档未实现不影响发布。当前 M2 代码闭环完成（后端 + Web 客户端），仅差联调环境上的端到端验收；M3 仅资料最小闭环已实现，设备/客户端配置与 M4 未开始，尚不满足发布门禁。
+- **首版门禁**：M0-M4 全部通过、Web 端完成 token 改造、压测与回滚演练通过后即可发布；B 档未实现不影响发布。当前 M2 代码闭环完成（后端 + Web 客户端），仅差联调环境上的端到端验收；M3 资料/设备/客户端配置代码闭环已完成，M4 未开始，尚不满足发布门禁。
 
 ### M5 上线加固（⏳ 未开始，与 M4 并行收尾）
 
@@ -1397,7 +1414,7 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 - [x] ✅ M1：多端登录互不影响，超限踢最旧，登出/踢出即时生效。
 - [x] ✅ M1：`userID` 即 IM userID，注册流程原样写入，无映射层（IM 下发待 M2）。
 - [x] ✅ M1：统一错误码与响应格式覆盖所有账号接口；敏感字段不落日志。
-- [x] ✅ M1：账号接口在最小 OpenAPI/代码中可查；`api/openapi.yaml` 已覆盖 7 个账号接口、3 个 IM 接口与 4 个资料 operation。
+- [x] ✅ M1：账号接口在最小 OpenAPI/代码中可查；`api/openapi.yaml` 已覆盖 7 个账号、3 个 IM、4 个资料、2 个设备与 2 个配置 operation。
 - [x] ✅ `/healthz`、`/readyz`、`/metrics` 已独立端口暴露。
 - [x] ✅ 日志字段规范落地，request_id 贯通；`X-Request-ID` 回写。
 - [x] ✅ 登录/注册限流可配置，限流实现已落地（防刷用例已补：`internal/middlewares/ratelimit_test.go`）。
@@ -1422,6 +1439,6 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 4. **验收（✅ 已完成）**：`go test ./...` 全绿；空库迁移成功；curl 跑通注册→登录→刷新→登出；多端会话互不影响；日志无敏感字段。
 5. **M2 IM 对接（🚧 进行中）**：goim 客户端、注册同步开通与手动重试、IM 开通 outbox 与后台补偿、`/im/token`（Redis 缓存 + IP 限流）、`/im/status`、`/im/retry` 已完成；Web 客户端 `adminSecret` 改造仍 ⏳。
 
-未包含（⏳ 后续 M2+）：设备/配置/文件域、B/C 档路由、管理端、OpenAPI 全量契约（当前仅账号、IM 与资料域最小契约）、RustFS/推送。
+未包含（⏳ 后续 M2+）：文件域、B/C 档路由、管理端、OpenAPI 全量契约（当前仅账号、IM、资料、设备与配置域最小契约）、RustFS/推送。
 
 代码不自动提交，提交时机与粒度由用户决定。

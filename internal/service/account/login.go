@@ -85,7 +85,11 @@ func (s *Service) Login(ctx context.Context, in types.LoginRequest) (*types.Auth
 			UserAgent: in.UserAgent,
 			IP:        in.IP,
 		}, "", nil, now)
-		return createErr
+		if createErr != nil {
+			return createErr
+		}
+		// 登录成功即登记设备。
+		return s.touchDevice(ctx, user.ID, in.Platform, deviceID, in.AppVersion, now)
 	})
 	if err != nil {
 		return nil, err

@@ -27,7 +27,7 @@ func TestOpenAPIAccountContract(t *testing.T) {
 	require.Equal(t, "/api/v1", mustMap(t, servers[0])["url"])
 
 	paths := mustMap(t, spec["paths"])
-	require.Len(t, paths, 13, "只允许描述 13 条路径：账号 7 条、IM 3 条、资料 3 条")
+	require.Len(t, paths, 17, "只允许描述 17 条路径：账号 7、IM 3、资料 3、设备 2、配置 2")
 	for _, path := range []string{
 		"/account/register",
 		"/account/login",
@@ -42,6 +42,10 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		"/profile/me",
 		"/profile/batch",
 		"/profile/users/{userId}",
+		"/devices",
+		"/devices/{deviceId}",
+		"/client-config",
+		"/client-config/schema",
 	} {
 		require.Contains(t, paths, path)
 	}
@@ -66,6 +70,9 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		"PublicProfileView",
 		"UpdateProfileRequest",
 		"BatchProfilesRequest",
+		"DeviceView",
+		"ClientConfigResponse",
+		"ClientConfigSchemaResponse",
 		"ErrorResponse",
 	} {
 		require.Contains(t, schemas, name)
@@ -93,6 +100,8 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		{"/profile/me", "put"},
 		{"/profile/batch", "post"},
 		{"/profile/users/{userId}", "get"},
+		{"/devices", "get"},
+		{"/devices/{deviceId}", "delete"},
 	}
 	for _, route := range authed {
 		op := mustMap(t, mustMap(t, paths[route.path])[route.method])
@@ -102,6 +111,11 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		require.Contains(t, mustMap(t, security[0]), "bearerAuth",
 			"%s %s 必须使用 bearerAuth", route.method, route.path)
 	}
+
+	// 客户端配置是公开接口，但必须声明 ETag 与 304。
+	configOp := mustMap(t, mustMap(t, paths["/client-config"])["get"])
+	require.NotContains(t, configOp, "security", "/client-config 不应要求鉴权")
+	require.Contains(t, mustMap(t, configOp["responses"]), "304", "/client-config 必须声明 304")
 }
 
 func mustMap(t *testing.T, value any) map[string]any {

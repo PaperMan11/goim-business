@@ -65,3 +65,18 @@ type Session struct {
 }
 
 func (Session) TableName() string { return "account_sessions" }
+
+// Device 是用户设备登记记录。
+type Device struct {
+	ID           int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	UserID       int64     `gorm:"column:user_id"`
+	DeviceID     string    `gorm:"column:device_id;size:64"`
+	Platform     int8      `gorm:"column:platform"`
+	AppVersion   string    `gorm:"column:app_version;size:32"`
+	PushToken    string    `gorm:"column:push_token;size:255"`
+	LastActiveAt time.Time `gorm:"column:last_active_at"`
+	CreatedAt    time.Time `gorm:"column:created_at"`
+	UpdatedAt    time.Time `gorm:"column:updated_at"`
+}
+
+func (Device) TableName() string { return "account_devices" }

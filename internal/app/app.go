@@ -22,8 +22,10 @@ import (
 	"goim-business/internal/pkg/token"
 	"goim-business/internal/repository"
 	accountrepo "goim-business/internal/repository/account"
+	clientconfigrepo "goim-business/internal/repository/clientconfig"
 	outboxrepo "goim-business/internal/repository/outbox"
 	"goim-business/internal/service/account"
+	clientconfigsvc "goim-business/internal/service/clientconfig"
 	"goim-business/internal/service/ports"
 )
 
@@ -44,7 +46,11 @@ type App struct {
 	Users       *accountrepo.UserRepo
 	Credentials *accountrepo.CredentialRepo
 	Sessions    *accountrepo.SessionRepo
+	Devices     *accountrepo.DeviceRepo
 	Outbox      *outboxrepo.Repo
+
+	// ClientConfigs 是客户端配置仓储。
+	ClientConfigs *clientconfigrepo.Repo
 
 	// 基础设施。
 	SessionCache *cache.SessionCache
@@ -54,7 +60,8 @@ type App struct {
 	IM           *goim.Client
 
 	// 业务服务。
-	AccountService *account.Service
+	AccountService      *account.Service
+	ClientConfigService *clientconfigsvc.Service
 }
 
 // NewApp 装配数据库、Redis、仓储、缓存与业务服务。
@@ -80,19 +87,21 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 	keyPrefix := fmt.Sprintf("%s:%s", cfg.Redis.KeyPrefix, cfg.Env)
 
 	a := &App{
-		Config:       cfg,
-		Logger:       log,
-		DB:           db,
-		SQLDB:        sqlDB,
-		Redis:        rdb,
-		KeyPrefix:    keyPrefix,
-		Tx:           repository.NewTxManager(db),
-		Users:        accountrepo.NewUserRepo(db),
-		Credentials:  accountrepo.NewCredentialRepo(db),
-		Sessions:     accountrepo.NewSessionRepo(db),
-		Outbox:       outboxrepo.New(db),
-		SessionCache: cache.NewSessionCache(rdb, keyPrefix),
-		IMTokenCache: cache.NewIMTokenCache(rdb, keyPrefix),
+		Config:        cfg,
+		Logger:        log,
+		DB:            db,
+		SQLDB:         sqlDB,
+		Redis:         rdb,
+		KeyPrefix:     keyPrefix,
+		Tx:            repository.NewTxManager(db),
+		Users:         accountrepo.NewUserRepo(db),
+		Credentials:   accountrepo.NewCredentialRepo(db),
+		Sessions:      accountrepo.NewSessionRepo(db),
+		Devices:       accountrepo.NewDeviceRepo(db),
+		Outbox:        outboxrepo.New(db),
+		ClientConfigs: clientconfigrepo.New(db),
+		SessionCache:  cache.NewSessionCache(rdb, keyPrefix),
+		IMTokenCache:  cache.NewIMTokenCache(rdb, keyPrefix),
 		TokenIssuer: token.NewIssuer(
 			cfg.Auth.JWTSecret,
 			cfg.Auth.Issuer,
@@ -122,6 +131,7 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		a.Users,
 		a.Credentials,
 		a.Sessions,
+		a.Devices,
 		a.Tx,
 		a.SessionCache,
 		a.SessionCache,
@@ -140,6 +150,12 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 			IMAPIBaseURL:           imAPIBaseURL,
 			IMWSURL:                cfg.IM.WSURL,
 		},
+		log.Sugar(),
+	)
+
+	a.ClientConfigService = clientconfigsvc.NewService(
+		a.ClientConfigs,
+		clientconfigsvc.Config{IMAPIBaseURL: imAPIBaseURL, IMWSURL: cfg.IM.WSURL},
 		log.Sugar(),
 	)
 	return a, nil

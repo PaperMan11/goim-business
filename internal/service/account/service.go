@@ -36,6 +36,7 @@ type Service struct {
 	users    domain.UserRepository
 	creds    domain.CredentialRepository
 	sessions domain.SessionRepository
+	devices  domain.DeviceRepository
 	tx       ports.TxManager
 	state    ports.SessionStateCache
 	throttle ports.LoginThrottle
@@ -55,6 +56,7 @@ func NewService(
 	users domain.UserRepository,
 	creds domain.CredentialRepository,
 	sessions domain.SessionRepository,
+	devices domain.DeviceRepository,
 	tx ports.TxManager,
 	state ports.SessionStateCache,
 	throttle ports.LoginThrottle,
@@ -70,6 +72,7 @@ func NewService(
 		users:    users,
 		creds:    creds,
 		sessions: sessions,
+		devices:  devices,
 		tx:       tx,
 		state:    state,
 		throttle: throttle,

@@ -73,7 +73,11 @@ func (s *Service) Register(ctx context.Context, in types.RegisterRequest) (*type
 			UserAgent: in.UserAgent,
 			IP:        in.IP,
 		}, "", nil, now)
-		return createErr
+		if createErr != nil {
+			return createErr
+		}
+		// 注册成功即登记设备。
+		return s.touchDevice(ctx, user.ID, in.Platform, deviceID, in.AppVersion, now)
 	})
 	if err != nil {
 		return nil, err

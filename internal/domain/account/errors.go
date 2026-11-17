@@ -11,7 +11,7 @@ var (
 	ErrPasswordLength     = errors.New("密码长度需为 8-64 位")
 	ErrPasswordComplexity = errors.New("密码需同时包含字母和数字")
 	ErrInvalidNickname    = errors.New("昵称长度不能超过 64 个字符")
-	ErrInvalidDeviceID    = errors.New("deviceId 不能为空")
+	ErrInvalidDeviceID    = errors.New("deviceId 需为 1-64 个字符")
 
 	ErrAccountFrozen   = errors.New("账号已被冻结")
 	ErrAccountDisabled = errors.New("账号不可用")

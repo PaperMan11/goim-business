@@ -158,6 +158,26 @@ func (r *SessionRepo) RevokeFamily(ctx context.Context, familyID string, at time
 	return sids, nil
 }
 
+// RevokeByDevice 撤销用户指定设备的全部活跃会话，返回被撤销的 sid。
+func (r *SessionRepo) RevokeByDevice(ctx context.Context, userID int64, deviceID string, at time.Time) ([]int64, error) {
+	db := r.dbFrom(ctx)
+	var sids []int64
+	if err := db.Model(&model.Session{}).
+		Where("user_id = ? AND device_id = ? AND revoked_at IS NULL AND rotated_at IS NULL", userID, deviceID).
+		Pluck("id", &sids).Error; err != nil {
+		return nil, err
+	}
+	if len(sids) == 0 {
+		return nil, nil
+	}
+	if err := db.Model(&model.Session{}).
+		Where("user_id = ? AND device_id = ? AND revoked_at IS NULL", userID, deviceID).
+		Update("revoked_at", at).Error; err != nil {
+		return nil, err
+	}
+	return sids, nil
+}
+
 // ListActive 列出用户当前活跃会话（未撤销、未轮换、未过期），按创建时间升序（最旧在前）。
 func (r *SessionRepo) ListActive(ctx context.Context, userID int64, at time.Time) ([]*domain.Session, error) {
 	var records []*model.Session

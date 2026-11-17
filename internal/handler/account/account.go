@@ -26,6 +26,18 @@ func Register(a *app.App) gin.HandlerFunc {
 			response.Abort(c, err)
 			return
 		}
+		deviceID, err := httpx.DeviceIDFrom(c)
+		if err != nil {
+			response.Abort(c, err)
+			return
+		}
+		appVersion, err := httpx.ClientVersionFrom(c)
+		if err != nil {
+			response.Abort(c, err)
+			return
+		}
+		in.DeviceID = deviceID
+		in.AppVersion = appVersion
 		in.UserAgent = c.Request.UserAgent()
 		in.IP = c.ClientIP()
 		in.Platform = platform
@@ -52,6 +64,18 @@ func Login(a *app.App) gin.HandlerFunc {
 			response.Abort(c, err)
 			return
 		}
+		deviceID, err := httpx.DeviceIDFrom(c)
+		if err != nil {
+			response.Abort(c, err)
+			return
+		}
+		appVersion, err := httpx.ClientVersionFrom(c)
+		if err != nil {
+			response.Abort(c, err)
+			return
+		}
+		in.DeviceID = deviceID
+		in.AppVersion = appVersion
 		in.UserAgent = c.Request.UserAgent()
 		in.IP = c.ClientIP()
 		in.Platform = platform

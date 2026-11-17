@@ -39,4 +39,10 @@ func InitRoutes(r *gin.RouterGroup, a *app.App) {
 	profileRoute.PUT("/me", UpdateProfile(a))
 	profileRoute.POST("/batch", BatchProfiles(a))
 	profileRoute.GET("/users/:userId", PublicProfile(a))
+
+	// 设备随注册/登录自动登记；此处只提供列表与按设备踢出。
+	deviceRoute := r.Group("/devices")
+	deviceRoute.Use(authenticator.Middleware())
+	deviceRoute.GET("", Devices(a))
+	deviceRoute.DELETE("/:deviceId", RemoveDevice(a))
 }

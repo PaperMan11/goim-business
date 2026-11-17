@@ -9,22 +9,24 @@ type RegisterRequest struct {
 	LoginName string `json:"loginName" binding:"required,min=3,max=64"`
 	Password  string `json:"password" binding:"required,max=64"`
 	Nickname  string `json:"nickname" binding:"max=64"`
-	DeviceID  string `json:"deviceId" binding:"required,max=64"`
 
-	UserAgent string `json:"-"`
-	IP        string `json:"-"`
-	Platform  int8   `json:"-"`
+	DeviceID   string `json:"-"`
+	AppVersion string `json:"-"`
+	UserAgent  string `json:"-"`
+	IP         string `json:"-"`
+	Platform   int8   `json:"-"`
 }
 
 // LoginRequest 是登录请求。
 type LoginRequest struct {
 	LoginName string `json:"loginName" binding:"required,max=64"`
 	Password  string `json:"password" binding:"required,max=64"`
-	DeviceID  string `json:"deviceId" binding:"required,max=64"`
 
-	UserAgent string `json:"-"`
-	IP        string `json:"-"`
-	Platform  int8   `json:"-"`
+	DeviceID   string `json:"-"`
+	AppVersion string `json:"-"`
+	UserAgent  string `json:"-"`
+	IP         string `json:"-"`
+	Platform   int8   `json:"-"`
 }
 
 // RefreshRequest 是刷新令牌请求。
@@ -115,6 +117,14 @@ type UpdateProfileRequest struct {
 // BatchProfilesRequest 是批量获取公开资料的请求。
 type BatchProfilesRequest struct {
 	UserIDs []string `json:"userIds" binding:"required,min=1,max=100,dive,required"`
+}
+
+// DeviceView 是对外暴露的设备信息，不含推送 token。
+type DeviceView struct {
+	DeviceID     string    `json:"deviceId"`
+	Platform     int8      `json:"platform"`
+	AppVersion   string    `json:"appVersion"`
+	LastActiveAt time.Time `json:"lastActiveAt"`
 }
 
 // AuthResp 是注册/登录/刷新的响应。
