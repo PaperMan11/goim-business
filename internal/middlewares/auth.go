@@ -76,7 +76,7 @@ func (a *Authenticator) Middleware() gin.HandlerFunc {
 
 		c.Set(CtxUserID, userID)
 		c.Set(CtxSessionID, sessionID)
-		c.Set(CtxPlatform, claims.PlatformID)
+		c.Set(CtxPlatform, int8(claims.PlatformID))
 		c.Set(CtxDeviceID, claims.DeviceID)
 		c.Next()
 	}
