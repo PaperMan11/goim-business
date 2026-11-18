@@ -22,6 +22,8 @@ type Config struct {
 	LoginLockWindow        time.Duration
 	IMAPIBaseURL           string
 	IMWSURL                string
+	// AvatarURL 把头像对象 key 解析为公开访问 URL；为空时仅接受已是 http(s) 的地址。
+	AvatarURL func(objectKey string) string
 }
 
 // IMProvisioner 是账号域消费的 IM 同步能力；实现位于 internal/job/im，账号域只依赖该接口。

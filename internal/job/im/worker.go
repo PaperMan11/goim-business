@@ -35,7 +35,18 @@ type Worker struct {
 	outbox    ports.OutboxRepository
 	batchSize int
 	now       func() time.Time
+	avatarURL func(string) string
 	log       logger.Logger
+}
+
+// Option 是 Worker 的可选配置。
+type Option func(*Worker)
+
+// WithAvatarURL 注入头像 key 到公开访问 URL 的解析函数。
+func WithAvatarURL(resolver func(objectKey string) string) Option {
+	return func(w *Worker) {
+		w.avatarURL = resolver
+	}
 }
 
 // NewWorker 构造 IM 开通 worker。
@@ -46,6 +57,7 @@ func NewWorker(
 	batchSize int,
 	now func() time.Time,
 	log logger.Logger,
+	opts ...Option,
 ) *Worker {
 	if now == nil {
 		now = time.Now
@@ -53,7 +65,7 @@ func NewWorker(
 	if batchSize <= 0 {
 		batchSize = defaultBatchSize
 	}
-	return &Worker{
+	worker := &Worker{
 		users:     users,
 		im:        im,
 		outbox:    outbox,
@@ -61,6 +73,10 @@ func NewWorker(
 		now:       now,
 		log:       log,
 	}
+	for _, opt := range opts {
+		opt(worker)
+	}
+	return worker
 }
 
 // Provision 在 IM 侧开通用户并回写开通状态；失败只记录日志并返回错误，由调用方决定影响范围。
@@ -69,12 +85,18 @@ func (w *Worker) Provision(ctx context.Context, user *domain.User) error {
 	provisionCtx := context.WithoutCancel(ctx)
 	userID := convert.ToString(user.ID)
 
-	if err := w.im.RegisterUser(provisionCtx, userID, user.Nickname); err != nil {
-		w.log.Warnf("IM 开通失败: user_id=%d, err=%v", user.ID, err)
+	registerErr := w.im.RegisterUser(provisionCtx, userID, user.Nickname, w.resolveAvatarURL(user.AvatarKey))
+	// IM 侧账号已存在时注册不会更新既有资料（例如账号由其他系统预建或上次响应丢失），
+	// 需补一次全量资料同步；同步失败按开通失败处理，交给 outbox 重试。
+	if errors.Is(registerErr, ports.ErrIMUserAlreadyExists) {
+		registerErr = w.SyncProfile(provisionCtx, user)
+	}
+	if registerErr != nil {
+		w.log.Warnf("IM 开通失败: user_id=%d, err=%v", user.ID, registerErr)
 		if writeErr := w.users.UpdateIMStatus(provisionCtx, user.ID, domain.IMStatusFailed, nil, w.now()); writeErr != nil {
 			w.log.Errorf("回写 IM 开通状态失败: user_id=%d, status=%d, err=%v", user.ID, domain.IMStatusFailed, writeErr)
 		}
-		return err
+		return registerErr
 	}
 
 	syncedAt := w.now()
@@ -88,15 +110,26 @@ func (w *Worker) Provision(ctx context.Context, user *domain.User) error {
 func (w *Worker) SyncProfile(ctx context.Context, user *domain.User) error {
 	// 客户端断开不应导致已发出的同步请求被误判失败。
 	syncCtx := context.WithoutCancel(ctx)
-	avatarURL := ""
-	if strings.HasPrefix(user.AvatarKey, "http://") || strings.HasPrefix(user.AvatarKey, "https://") {
-		avatarURL = user.AvatarKey
-	}
-	if err := w.im.UpdateUserInfo(syncCtx, convert.ToString(user.ID), user.Nickname, avatarURL); err != nil {
+	if err := w.im.UpdateUserInfo(syncCtx, convert.ToString(user.ID), user.Nickname, w.resolveAvatarURL(user.AvatarKey)); err != nil {
 		w.log.Warnf("IM 资料同步失败: user_id=%d, err=%v", user.ID, err)
 		return err
 	}
 	return nil
+}
+
+// resolveAvatarURL 把头像 key 解析为可直接访问的稳定 URL；已是 http(s) 地址时原样返回。
+func (w *Worker) resolveAvatarURL(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	if strings.HasPrefix(key, "http://") || strings.HasPrefix(key, "https://") {
+		return key
+	}
+	if w.avatarURL == nil {
+		return ""
+	}
+	return w.avatarURL(key)
 }
 
 // Settle 在同步调用结束后落定指定类型唯一一条 outbox 任务：

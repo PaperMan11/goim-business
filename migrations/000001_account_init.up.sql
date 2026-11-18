@@ -34,7 +34,7 @@ CREATE TABLE account_credentials (
 CREATE TABLE account_sessions (
   id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '会话 ID（sid），写入 JWT 的 sid 声明后以字符串形式输出',
   user_id      BIGINT UNSIGNED NOT NULL COMMENT '逻辑关联 account_users.id（无数据库外键）',
-  family_id    CHAR(36)     NOT NULL COMMENT '刷新轮换家族 ID（UUID）；同一登录链路的所有会话共享，检测到重放时整族撤销',
+  family_id    VARCHAR(40)  NOT NULL COMMENT '刷新轮换家族 ID（acc_ + UUIDv7）；同一登录链路的所有会话共享，检测到重放时整族撤销',
   refresh_hash CHAR(64)     NOT NULL COMMENT 'refresh token 的 SHA-256 十六进制摘要；只存摘要，不存明文令牌',
   rotated_from BIGINT UNSIGNED NULL COMMENT '由哪个会话轮换而来；NULL 表示该家族的首次登录',
   platform     TINYINT      NOT NULL COMMENT '客户端平台编码：1 iOS 2 Android 3 Windows 4 Mac 5 Web',

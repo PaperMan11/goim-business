@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,14 +19,17 @@ import (
 	"goim-business/internal/config"
 	imjob "goim-business/internal/job/im"
 	"goim-business/internal/pkg/ratelimit"
+	"goim-business/internal/pkg/storage/s3"
 	"goim-business/internal/pkg/timex"
 	"goim-business/internal/pkg/token"
 	"goim-business/internal/repository"
 	accountrepo "goim-business/internal/repository/account"
 	clientconfigrepo "goim-business/internal/repository/clientconfig"
+	filerepo "goim-business/internal/repository/file"
 	outboxrepo "goim-business/internal/repository/outbox"
 	"goim-business/internal/service/account"
 	clientconfigsvc "goim-business/internal/service/clientconfig"
+	filesvc "goim-business/internal/service/file"
 	"goim-business/internal/service/ports"
 )
 
@@ -52,16 +56,21 @@ type App struct {
 	// ClientConfigs 是客户端配置仓储。
 	ClientConfigs *clientconfigrepo.Repo
 
+	// Files 是文件对象元数据仓储。
+	Files *filerepo.Repo
+
 	// 基础设施。
 	SessionCache *cache.SessionCache
 	IMTokenCache *cache.IMTokenCache
 	TokenIssuer  *token.Issuer
 	RateLimiter  *ratelimit.Limiter
 	IM           *goim.Client
+	Storage      s3.S3Client
 
 	// 业务服务。
 	AccountService      *account.Service
 	ClientConfigService *clientconfigsvc.Service
+	FileService         *filesvc.Service
 }
 
 // NewApp 装配数据库、Redis、仓储、缓存与业务服务。
@@ -100,6 +109,7 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		Devices:       accountrepo.NewDeviceRepo(db),
 		Outbox:        outboxrepo.New(db),
 		ClientConfigs: clientconfigrepo.New(db),
+		Files:         filerepo.New(db),
 		SessionCache:  cache.NewSessionCache(rdb, keyPrefix),
 		IMTokenCache:  cache.NewIMTokenCache(rdb, keyPrefix),
 		TokenIssuer: token.NewIssuer(
@@ -127,6 +137,11 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		imAPIBaseURL = strings.TrimRight(cfg.IM.BaseURL, "/") + "/api/v1"
 	}
 
+	// 头像 key 转公开 URL：只认 public/ 命名空间，附件等私有 key 不会生成匿名地址。
+	avatarURL := func(objectKey string) string {
+		return cfg.Storage.PublicObjectURL(objectKey)
+	}
+
 	a.AccountService = account.NewService(
 		a.Users,
 		a.Credentials,
@@ -138,7 +153,7 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		imClient{client: a.IM},
 		a.IMTokenCache,
 		a.Outbox,
-		imjob.NewWorker(a.Users, imClient{client: a.IM}, a.Outbox, cfg.IM.OutboxBatchSize, timex.Now, log.Sugar()),
+		imjob.NewWorker(a.Users, imClient{client: a.IM}, a.Outbox, cfg.IM.OutboxBatchSize, timex.Now, log.Sugar(), imjob.WithAvatarURL(avatarURL)),
 		a.TokenIssuer,
 		account.Config{
 			AccessTTL:              cfg.Auth.AccessTTL,
@@ -149,6 +164,7 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 			LoginLockWindow:        cfg.Auth.LoginLockWindow,
 			IMAPIBaseURL:           imAPIBaseURL,
 			IMWSURL:                cfg.IM.WSURL,
+			AvatarURL:              avatarURL,
 		},
 		log.Sugar(),
 	)
@@ -156,6 +172,34 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 	a.ClientConfigService = clientconfigsvc.NewService(
 		a.ClientConfigs,
 		clientconfigsvc.Config{IMAPIBaseURL: imAPIBaseURL, IMWSURL: cfg.IM.WSURL},
+		log.Sugar(),
+	)
+
+	if cfg.Storage.Enabled() {
+		storageClient, err := s3.NewS3Client(ctx, &s3.Config{
+			Endpoint:       cfg.Storage.Endpoint,
+			PublicEndpoint: cfg.Storage.PublicEndpoint,
+			AccessKey:      cfg.Storage.AccessKey,
+			SecretKey:      cfg.Storage.SecretKey,
+			Region:         cfg.Storage.Region,
+			Bucket:         cfg.Storage.Bucket,
+			UsePathStyle:   cfg.Storage.UsePathStyle,
+			PresignExpire:  cfg.Storage.PresignExpire,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("初始化对象存储失败: %w", err)
+		}
+		a.Storage = storageClient
+	} else {
+		log.Warn("对象存储未配置，文件上传接口将返回不可用")
+	}
+	a.FileService = filesvc.NewService(
+		a.Files,
+		a.Storage,
+		filesvc.Config{
+			PresignExpire:          cfg.Storage.PresignExpire,
+			MultipartPresignExpire: cfg.Storage.MultipartPresignExpire,
+		},
 		log.Sugar(),
 	)
 	return a, nil
@@ -170,8 +214,12 @@ type imClient struct {
 func (c imClient) Enabled() bool { return c.client.Enabled() }
 
 // RegisterUser 在 IM 侧开通用户。
-func (c imClient) RegisterUser(ctx context.Context, userID, nickname string) error {
-	return c.client.RegisterUser(ctx, goim.UserInfo{UserID: userID, Nickname: nickname})
+func (c imClient) RegisterUser(ctx context.Context, userID, nickname, avatarURL string) error {
+	err := c.client.RegisterUser(ctx, goim.UserInfo{UserID: userID, Nickname: nickname, AvatarURL: avatarURL})
+	if errors.Is(err, goim.ErrUserAlreadyExists) {
+		return ports.ErrIMUserAlreadyExists
+	}
+	return err
 }
 
 // UpdateUserInfo 把昵称与头像同步到 IM。

@@ -97,6 +97,7 @@ type ProfileView struct {
 	LoginName string `json:"loginName"`
 	Nickname  string `json:"nickname"`
 	AvatarKey string `json:"avatarKey"`
+	AvatarURL string `json:"avatarUrl"`
 	Bio       string `json:"bio"`
 }
 
@@ -105,6 +106,7 @@ type PublicProfileView struct {
 	UserID    string `json:"userId"`
 	Nickname  string `json:"nickname"`
 	AvatarKey string `json:"avatarKey"`
+	AvatarURL string `json:"avatarUrl"`
 }
 
 // UpdateProfileRequest 是更新资料请求；字段为 nil 表示不修改。

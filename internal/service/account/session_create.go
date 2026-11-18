@@ -27,7 +27,7 @@ func (s *Service) createSession(
 		return nil, TokenPair{}, nil, errcode.ErrInternal
 	}
 	if familyID == "" {
-		familyID, err = idgen.New()
+		familyID, err = idgen.NewWithPrefix(idgen.PrefixAccount)
 		if err != nil {
 			s.log.Errorf("生成刷新家族 ID 失败: %v", err)
 			return nil, TokenPair{}, nil, errcode.ErrInternal

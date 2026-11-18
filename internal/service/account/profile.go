@@ -21,7 +21,7 @@ func (s *Service) Profile(ctx context.Context, userID int64) (*types.ProfileView
 		}
 		return nil, s.dbErr("查询用户资料", err)
 	}
-	return profileView(user), nil
+	return s.profileView(user), nil
 }
 
 // UpdateProfile 更新用户资料，并在同一事务内写入 IM 同步任务；提交后即时同步一次。
@@ -81,7 +81,7 @@ func (s *Service) UpdateProfile(ctx context.Context, userID int64, in types.Upda
 		syncErr := s.imSync.SyncProfile(syncCtx, user)
 		s.imSync.Settle(syncCtx, user.ID, ports.OutboxActionProfileSync, syncErr)
 	}
-	return profileView(user), nil
+	return s.profileView(user), nil
 }
 
 // Profiles 批量返回公开资料；不存在的用户直接跳过。
@@ -95,25 +95,42 @@ func (s *Service) Profiles(ctx context.Context, ids []int64) ([]types.PublicProf
 	}
 	views := make([]types.PublicProfileView, 0, len(users))
 	for _, user := range users {
-		views = append(views, publicProfileView(user))
+		views = append(views, s.publicProfileView(user))
 	}
 	return views, nil
 }
 
-func profileView(user *domain.User) *types.ProfileView {
+func (s *Service) profileView(user *domain.User) *types.ProfileView {
 	return &types.ProfileView{
 		UserID:    convert.ToString(user.ID),
 		LoginName: user.LoginName,
 		Nickname:  user.Nickname,
 		AvatarKey: user.AvatarKey,
+		AvatarURL: s.resolveAvatarURL(user.AvatarKey),
 		Bio:       user.Bio,
 	}
 }
 
-func publicProfileView(user *domain.User) types.PublicProfileView {
+func (s *Service) publicProfileView(user *domain.User) types.PublicProfileView {
 	return types.PublicProfileView{
 		UserID:    convert.ToString(user.ID),
 		Nickname:  user.Nickname,
 		AvatarKey: user.AvatarKey,
+		AvatarURL: s.resolveAvatarURL(user.AvatarKey),
 	}
+}
+
+// resolveAvatarURL 把头像 key 解析为公开访问 URL；已是 http(s) 地址时原样返回。
+func (s *Service) resolveAvatarURL(key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	if strings.HasPrefix(key, "http://") || strings.HasPrefix(key, "https://") {
+		return key
+	}
+	if s.cfg.AvatarURL == nil {
+		return ""
+	}
+	return s.cfg.AvatarURL(key)
 }

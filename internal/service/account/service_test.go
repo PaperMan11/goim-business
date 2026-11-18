@@ -80,7 +80,7 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 
 	issuer := token.NewIssuer("test-secret-0123456789", "goim-business", "goim-business-api", cfg.AccessTTL)
 	clock := &testClock{base: time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC)}
-	imSync := imjob.NewWorker(users, provisioner, outbox, 20, clock.Now, zap.NewNop().Sugar())
+	imSync := imjob.NewWorker(users, provisioner, outbox, 20, clock.Now, zap.NewNop().Sugar(), imjob.WithAvatarURL(cfg.AvatarURL))
 	svc := NewService(users, creds, sessions, devices, fakeTx{}, cache, cache, provisioner, imTokens, outbox, imSync, issuer, cfg, zap.NewNop().Sugar())
 
 	svc.now = clock.Now
@@ -478,6 +478,7 @@ type fakeProvisioner struct {
 	calls        int
 	lastUserID   string
 	lastNickname string
+	lastAvatar   string
 	err          error
 
 	updateCalls        int
@@ -503,12 +504,13 @@ func (f *fakeProvisioner) Enabled() bool {
 	return f.enabled
 }
 
-func (f *fakeProvisioner) RegisterUser(_ context.Context, userID, nickname string) error {
+func (f *fakeProvisioner) RegisterUser(_ context.Context, userID, nickname, avatarURL string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
 	f.lastUserID = userID
 	f.lastNickname = nickname
+	f.lastAvatar = avatarURL
 	return f.err
 }
 
@@ -584,6 +586,13 @@ func (f *fakeProvisioner) last() (calls int, userID, nickname string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls, f.lastUserID, f.lastNickname
+}
+
+// lastRegister 返回最近一次开通请求的全部参数，用于断言头像是否一并下发。
+func (f *fakeProvisioner) lastRegister() (calls int, userID, nickname, avatarURL string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls, f.lastUserID, f.lastNickname, f.lastAvatar
 }
 
 type fakeIMTokenEntry struct {

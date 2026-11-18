@@ -33,10 +33,10 @@
 | 可观测 | ✅ 已实现 | zap JSON、request_id、Recovery、Prometheus 指标、`/healthz`、`/readyz` |
 | 交付 | ✅ 已实现 | Makefile、Dockerfile、compose、GitHub Actions、migrations + `cmd/{api,migrate,cron}` |
 | IM 凭证兑换 / 账号开通 | ✅ 已实现 | `internal/client/goim`、`internal/handler/account`（IM handler）、`internal/cache/im_token_cache.go`；IM 开通 outbox 补偿 ✅；资料同步 `profile_sync` ✅ |
-| 用户资料 | ✅ 最小闭环 | `/profile` 路由 + `profile_sync` outbox；头像仅存 `avatar_key`，预签名 URL/上传待 M4 |
+| 用户资料 | ✅ 最小闭环 | `/profile` 路由 + `profile_sync` outbox；头像走 `/files` 上传后写 `avatar_key`；展示用公开 `avatarUrl` |
 | 设备 | ✅ 已实现 | `account_devices` 表随注册/登录自动登记；`/devices` 列表与移除（移除同时撤销该设备会话） |
 | 客户端配置 | ✅ 已实现 | `client_configs` 表 + `/client-config`、`/client-config/schema`；版本化 ETag 与 304 |
-| 文件 | ⏳ 规划中 | 无 RustFS client、无 `/files` 路由 |
+| 文件 | ✅ 头像上传已实现 | `file_objects` + RustFS/S3 预签名（`/files`）；孤儿清理 ⏳ |
 | 通知 / 推送 | ⏳ 规划中 | 无 `notifications` 表、无投递逻辑 |
 | 管理端 / OAuth | ⏳ 规划中 | 无管理端路由与角色体系 |
 | 多租户 | ❌ 不做 | 首版单租户，依赖 goim 多租户改造后再评估 |
@@ -50,10 +50,10 @@
 | 账号与鉴权 | 自建 access JWT（默认 15 分钟）+ 不透明 refresh token（默认 30 天，轮换 + 重放检测） | goim 只有 24h access token，无 refresh；终端必须有自己的登录态 | ✅ 已实现 |
 | IM 凭证兑换 | `POST /api/v1/im/token`，服务端缓存 admin token 并向 goim 换取 user token | 不解决这一条，前端就只能继续内置 adminSecret，属于阻塞项 | ✅ 已实现（含 Web 客户端 `loginWithToken` 接入） |
 | IM 账号开通 | 注册后同步调用 goim `/user/user_register`，失败进入 outbox 补偿，也可通过 `/im/retry` 手动重试 | 没有 IM user 投影，资料/会话/推送都查不到人 | ✅ 已实现（开通 outbox ✅；资料变更同步 ✅） |
-| 用户资料（最小） | 昵称、头像 fileId、bio；MySQL 为事实源，goim 为投影 | 聊天界面必须显示昵称/头像 | ✅ 已实现（头像上传/预签名 URL 待 M4） |
+| 用户资料（最小） | 昵称、头像 fileId、bio；MySQL 为事实源，goim 为投影 | 聊天界面必须显示昵称/头像 | ✅ 已实现（头像上传 `/files` 与公开 `avatarUrl` 已就绪） |
 | 设备注册 | deviceID、平台、版本、最后活跃；支撑多端会话与踢出 | 多端登录是 Web + 桌面的现实场景 | ✅ 已实现（`account_devices`，移除设备即踢出该设备会话） |
 | 客户端配置 | IM 地址、平台映射、上传限制、功能开关；版本 + ETag | 客户端换环境/开关不能靠重新发版 | ✅ 已实现（`client_configs` + ETag/304；配置表缺失回退内置默认值） |
-| 文件（仅头像） | 复用 RustFS：预签名 PUT + complete 校验 + 现签 GET | 头像上传是资料闭环的一部分；聊天附件继续走 goim `/third/*` | ⏳ 规划中 |
+| 文件（头像 + 附件） | 复用 RustFS：单文件 PUT + 分片上传 + 现签 GET；公开资源统一 `public/` 命名空间 | 头像走单文件并直接使用公开 URL；业务附件走分片；聊天附件仍走 goim `/third/*` | ✅ 已实现（孤儿清理 ⏳） |
 | 可观测与交付 | 日志、request_id、Prometheus、健康检查、迁移、单测、compose、CI、镜像、优雅启停 | 上线门槛，不属于业务功能但不能省 | ✅ 已实现（详见 §4.11~§4.13） |
 
 ### 1.4 只定义契约、首版不实现
@@ -302,7 +302,7 @@ cors:
 - `mysql.dsn` 必填；`redis.addr`、`redis.key_prefix` 必填。
 - `auth.jwt_secret` 长度 ≥ 16；`issuer/audience` 非空；`refresh_ttl > access_ttl`；`max_sessions_per_platform <= max_sessions_per_user`；`login_lock_threshold/login_lock_window > 0`。
 
-后续规划（⏳）：`storage`、`features` 等配置段尚未进入结构体；基于 `app_configs` 表 + Redis 的业务可变配置也未实现。密钥类（`mysql.dsn`、`redis.password`、`auth.jwt_secret`、`im.admin_secret`、对象存储 AK/SK）始终只允许环境变量/K8s Secret，仓库中留空。
+后续规划（⏳）：`features` 等配置段尚未进入结构体；基于 `app_configs` 表 + Redis 的业务可变配置也未实现。`storage` 段已实现（endpoint/bucket 同时为空表示未启用，启动期校验地址、region、AK/SK、`presign_expire` 与 `multipart_presign_expire`）。密钥类（`mysql.dsn`、`redis.password`、`auth.jwt_secret`、`im.admin_secret`、对象存储 AK/SK）始终只允许环境变量/K8s Secret，仓库中留空。
 
 ### 4.3 依赖注入与项目分层（✅ 已实现）
 
@@ -655,7 +655,7 @@ CREATE TABLE outbox_events (
 
 新增定时任务只需实现 `cron.Job`（`Name` / `Spec` / `Timeout` / `Run`）并在 `cmd/cron` 注册；锁键自动为 `{redis.key_prefix}:{env}:cron:{name}`，不同任务使用不同锁，不会相互阻塞。`Timeout` 必须小于锁 TTL（当前 5 分钟）。
 
-通用 `outbox_events` 已落地（000002）；后续可扩展 `topic`/`aggregate_id` 字段以承载更多 action，并计划用 `SELECT ... FOR UPDATE SKIP LOCKED` 批量取任务、超过阈值进死信状态并告警。worker 已完全独立：实现位于 `internal/job/im`（`Worker.Provision/SyncProfile/Settle/RunDue`），`Settle` 以 `(userID, action, cause)` 统一落定开通与资料同步任务，账号域只依赖 `IMProvisioner` 接口；goim 侧新增 `/user/update_user_info` 同步（admin token），头像仅当 `avatar_key` 本身是 http(s) URL 时才作为 faceURL 下发。outbox 的端口与类型（`OutboxEntry`、状态常量、`OutboxRepository`）定义在 `internal/service/ports/outbox.go`，表模型与实现在 `internal/model/outbox.go`、`internal/repository/outbox`，domain 只保留用户、凭证、会话三个聚合的仓储。`cmd/cron` 使用 `NewCronApp` 精简装配（不构建 HTTP、令牌、限流组件），并以 Redis 分布式锁保证多实例下同一时刻只有一个补偿任务在运行。
+通用 `outbox_events` 已落地（000002）；后续可扩展 `topic`/`aggregate_id` 字段以承载更多 action，并计划用 `SELECT ... FOR UPDATE SKIP LOCKED` 批量取任务、超过阈值进死信状态并告警。worker 已完全独立：实现位于 `internal/job/im`（`Worker.Provision/SyncProfile/Settle/RunDue`），`Settle` 以 `(userID, action, cause)` 统一落定开通与资料同步任务，账号域只依赖 `IMProvisioner` 接口；goim 侧新增 `/user/update_user_info` 同步（admin token），头像 key 由 `storage.public_endpoint + bucket` 解析为稳定公开 URL 后作为 faceURL 下发（已是 http(s) 地址时原样使用）。outbox 的端口与类型（`OutboxEntry`、状态常量、`OutboxRepository`）定义在 `internal/service/ports/outbox.go`，表模型与实现在 `internal/model/outbox.go`、`internal/repository/outbox`，domain 只保留用户、凭证、会话三个聚合的仓储。`cmd/cron` 使用 `NewCronApp` 精简装配（不构建 HTTP、令牌、限流组件），并以 Redis 分布式锁保证多实例下同一时刻只有一个补偿任务在运行。
 
 升级路径：当出现跨团队消费、峰值 >1000 TPS 或需要多订阅方时，再把 outbox 投递到 Kafka；业务代码只需替换 dispatcher。
 
@@ -664,13 +664,13 @@ CREATE TABLE outbox_events (
 **结论：复用现有 RustFS（S3 兼容），业务资产独立 bucket；AWS SDK v2 直接预签名，不经过 goim。**
 
 - 聊天附件继续走 goim `/third/*`（SDK 已封装）。
-- 业务资产（首版头像；后续反馈截图、后台素材）走 `goim-business` 自己的 bucket `goim-business`，前缀 `avatar/`、`feedback/`、`admin/`。
-- 流程：`POST /files/presign` 返回 PUT URL（10 分钟）→ 客户端直传 → `POST /files/complete` 后服务端 `HeadObject` 校验大小/类型 → 落 `file_objects` → 展示时 `GET /files/{id}/url` 现签 GET URL。
-- 安全：私有桶；AccessKey/SecretKey 只在环境变量；预签名锁 Content-Type 与大小；对象 key 用 `purpose/ownerID/uuid`，禁止客户端指定任意 key；文件名不参与路径。
+- 业务资产（首版头像；后续反馈截图、后台素材）走 `goim-business` 自己的 bucket `goim-business`；所有公开资源统一放在 `public/` 命名空间下（如 `public/avatar/`），私有资源沿用各自用途前缀（如 `attachment/`）。
+- 流程：`POST /files/presign` 返回 PUT URL（15 分钟）→ 客户端直传 → `POST /files/complete` 后服务端 `HeadObject` 校验大小/类型 → 落 `file_objects` → 附件展示时 `GET /files/{id}/url` 现签 GET URL，头像直接使用公开 `avatarUrl`。
+- 安全：附件保持私有桶；仅 `public/` 命名空间由 bucket policy 或 Nginx 开放匿名 GET，其他前缀一律只允许预签名访问；AccessKey/SecretKey 只在环境变量；预签名锁 Content-Type 与大小；对象 key 统一由 `domain.BuildObjectKey` 生成，禁止客户端指定任意 key；文件名不参与路径。
 - 清理：定时任务删除 `status=uploading` 超 24h 的孤儿对象；软删文件延迟 7 天物理删除。
 - CDN 后置：先由 Nginx 反代 RustFS；量起来后再上 CDN + 签名回源。
 
-当前无 `storage` 配置段、无 AWS SDK 依赖、无 `client/storage` 包（⏳）。
+已落地部分（✅）：`storage` 配置段（`etc/base.yaml`，密钥走 `GOIM_BIZ_STORAGE__SECRET_KEY`）、AWS SDK v2 依赖与 `internal/pkg/storage/s3` 适配层、`file_objects` 元数据表（migration `000005`）。文件 HTTP 接口与清理任务尚未注册（⏳）。
 
 ### 4.16 推送通道选型（⏳ 规划中，不实现）
 
@@ -705,9 +705,10 @@ goim-business/
 │   ├── 000002_common_outbox_events.up.sql # 通用 outbox 任务表（+ down）
 │   ├── 000003_account_devices.up.sql # 设备登记表（+ down）
 │   ├── 000004_account_client_configs.up.sql  # 客户端配置表（+ down）
+│   ├── 000005_file_objects.up.sql  # 文件对象元数据表（+ down）
 │   └── embed.go                    # embed.FS
 ├── api/
-│   ├── openapi.yaml                # 账号/IM/资料/设备/配置最小 OpenAPI 3.0.3 契约
+│   ├── openapi.yaml                # 账号/IM/资料/设备/配置/文件 OpenAPI 3.0.3 契约
 │   └── openapi_test.go             # 契约守护测试
 ├── internal/
 │   ├── app/app.go                  # 手写组合根 NewApp / Close
@@ -816,12 +817,12 @@ goim-business/
 ├── internal/
 │   ├── app/
 │   ├── config/
-│   ├── domain/{account,file,clientconfig}/   # account 含 profile/device（✅）；clientconfig ✅；file ⏳
-│   ├── handler/{account,clientconfig,file,notification,admin,internal}/   # account/clientconfig ✅
+│   ├── domain/{account,file,clientconfig}/   # account 含 profile/device（✅）；clientconfig ✅；file ✅
+│   ├── handler/{account,clientconfig,file,notification,admin,internal}/   # account/clientconfig/file ✅
 │   ├── middlewares/                # 现有目录；未来增加 adminauth.go、idempotency.go
-│   ├── service/{account,clientconfig,file,notification,admin}/   # account 含 im_outbox.go、profile.go、device.go（✅）；clientconfig ✅
-│   ├── repository/{account,clientconfig,file,notification,audit}/   # account 含 device.go、outbox 在独立包（✅）；clientconfig ✅
-│   ├── client/{goim,storage}/      # ✅ goim HTTP；⏳ RustFS 预签名
+│   ├── service/{account,clientconfig,file,notification,admin}/   # account 含 im_outbox.go、profile.go、device.go（✅）；clientconfig ✅；file ✅
+│   ├── repository/{account,clientconfig,file,notification,audit}/   # account 含 device.go、outbox 在独立包（✅）；clientconfig/file ✅
+│   ├── client/{goim,storage}/      # ✅ goim HTTP；S3 适配层在 pkg/storage/s3 ✅
 │   ├── job/{im,file_cleanup,scheduler}/  # im ✅；其余 ⏳
 │   ├── model/、types/、pkg/
 ├── deploy/{compose.dev.yaml,k8s/}   # ⏳ k8s
@@ -912,7 +913,7 @@ CREATE TABLE account_credentials (
 CREATE TABLE account_sessions (
   id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT 'sid；写入 JWT 的 sid 声明后以字符串输出',
   user_id      BIGINT UNSIGNED NOT NULL,
-  family_id    CHAR(36)     NOT NULL COMMENT '刷新轮换家族 ID（UUID）；同一登录链路共享，重放时整族撤销',
+  family_id    VARCHAR(40)  NOT NULL COMMENT '刷新轮换家族 ID（acc_ + UUIDv7）；同一登录链路共享，重放时整族撤销',
   refresh_hash CHAR(64)     NOT NULL COMMENT 'refresh token 的 SHA-256 十六进制摘要；只存摘要',
   rotated_from BIGINT UNSIGNED NULL COMMENT '由哪个会话轮换而来；NULL 为首登',
   platform     TINYINT      NOT NULL COMMENT '1 iOS 2 Android 3 Windows 4 Mac 5 Web 11 HarmonyOS',
@@ -932,7 +933,7 @@ CREATE TABLE account_sessions (
 
 生命周期与轮换家族语义：
 
-- 创建：`revoked_at`/`rotated_at` 均为 NULL，`family_id` 为 UUID。
+- 创建：`revoked_at`/`rotated_at` 均为 NULL，`family_id` 为 `acc_<uuidv7>`（40 字符），便于区分来源。
 - 轮换：旧行 `rotated_at` 写入时间，新行 `family_id` 继承旧行、`rotated_from=旧 sid`；同一家族的所有会话共享“一次登录链”。
 - 撤销：登出/踢出/改密写 `revoked_at`；重放检测按 `family_id` 整族撤销。
 - 活跃判定：`revoked_at IS NULL AND rotated_at IS NULL AND expires_at > now`；Redis 活跃标记 TTL 与 `expires_at` 对齐。
@@ -1090,9 +1091,9 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 
 | 方法 | 路径 | 鉴权 | 说明 | 状态 |
 |---|---|---|---|---|
-| GET | `/profile/me` | 🔐 | 当前用户资料（返回 `nickname/avatarKey/bio`；预签名 URL 待文件域） | ✅ |
+| GET | `/profile/me` | 🔐 | 当前用户资料（返回 `nickname/avatarKey/avatarUrl/bio`） | ✅ |
 | PUT | `/profile/me` | 🔐 | 更新昵称/头像 key/bio，同事务写入 `profile_sync` outbox 并同步 goim | ✅ |
-| POST | `/profile/batch` | 🔐 | 批量取公开资料（昵称/头像 key，最多 100 个） | ✅ |
+| POST | `/profile/batch` | 🔐 | 批量取公开资料（昵称/头像 key/avatarUrl，最多 100 个） | ✅ |
 | GET | `/profile/users/{userId}` | 🔐 | 单个公开资料，不存在返回 1004 | ✅ |
 | PUT | `/profile/me/extended` | 🔐 | 扩展字段（地区/性别/签名/自定义 JSON） | ⏳ |
 
@@ -1126,14 +1127,20 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 }
 ```
 
-### 8.6 文件 `/files`（⏳ 规划中，未注册路由）
+### 8.6 文件 `/files`（✅ 已注册，孤儿清理 ⏳）
+
+`file_objects` 表（migration `000005`）、S3 适配层（`internal/pkg/storage/s3`）与文件服务（`internal/service/file`）已就绪。
 
 | 方法 | 路径 | 鉴权 | 说明 | 状态 |
 |---|---|---|---|---|
-| POST | `/files/presign` | 🔐 | 申请上传：校验 purpose/mime/size，返回 fileId + PUT URL | ⏳ |
-| POST | `/files/{fileId}/complete` | 🔐 | 客户端上传完成后校验对象并置为 ready | ⏳ |
-| GET | `/files/{fileId}/url` | 🔐 | 现签 GET URL | ⏳ |
-| DELETE | `/files/{fileId}` | 🔐 | 软删（仅本人/管理端） | ⏳ |
+| POST | `/files/presign` | 🔐 | 申请单文件上传：校验 purpose/mime/size，返回 fileId + PUT URL | ✅ |
+| POST | `/files/{fileId}/complete` | 🔐 | 客户端上传完成后校验对象并置为 ready | ✅ |
+| POST | `/files/multipart/presign` | 🔐 | 申请分片上传（attachment 8MB–200MB），返回全部分片 URL | ✅ |
+| POST | `/files/{fileId}/multipart/complete` | 🔐 | 合并分片并二次校验，置为 ready | ✅ |
+| POST | `/files/{fileId}/multipart/parts` | 🔐 | 刷新分片签名（复用 uploadId，可指定分片） | ✅ |
+| POST | `/files/{fileId}/multipart/abort` | 🔐 | 取消未完成的分片上传 | ✅ |
+| GET | `/files/{fileId}/url` | 🔐 | 现签 GET URL | ✅ |
+| DELETE | `/files/{fileId}` | 🔐 | 软删（仅本人/管理端） | ✅ |
 | POST | `/files/chat-attachment/presign` | 🔐 | 通用聊天附件签名 | ❌ 不做（直接走 goim `/third/*`） |
 
 `POST /files/presign` 目标请求/响应：
@@ -1142,9 +1149,22 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 // request
 { "purpose": "avatar", "fileName": "me.png", "mime": "image/png", "size": 120000, "sha256": "..." }
 // response
-{ "fileId": "18", "objectKey": "avatar/123/uuid.png", "uploadUrl": "https://...X-Amz-Signature=...",
+{ "fileId": "18", "objectKey": "public/avatar/123/uuid.png", "uploadUrl": "https://...X-Amz-Signature=...",
   "method": "PUT", "headers": { "Content-Type": "image/png" }, "expiresAt": 1763000600 }
 ```
+
+实现约定（✅）：
+
+- 对象键由服务端统一生成：公开资源为 `public/{purpose}/{userId}/file_<uuid>.{ext}`，私有资源为 `{purpose}/{userId}/file_<uuid>.{ext}`；客户端不能指定；文件名不参与路径，`file_` 前缀用于区分来源。
+- 首版单文件仅 `avatar`：JPEG/PNG/WebP，≤ 5MB；预签名 PUT URL 默认 15 分钟。
+- 分片上传仅 `attachment`：8MB < size ≤ 200MB，固定 8MB 分片、最多 100 片；分片预签名默认 2 小时（`storage.multipart_presign_expire`），单文件 PUT 与 GET URL 仍为 15 分钟（`storage.presign_expire`）。附件 MIME 白名单：JPEG/PNG/WebP/GIF、PDF、ZIP、TXT、MP4、DOCX/XLSX/PPTX。
+- `attachment` 单文件上限 8MB；超过时返回 1001，提示改用分片接口。
+- 分片 `upload_id` 随 pending 记录落库，complete/abort 由服务端按 `fileId` 定位，客户端无需回传。
+- 续期接口 `POST /files/{fileId}/multipart/parts` 复用原 uploadId 与 objectKey，不产生新记录；`partNumbers` 为空刷新全部分片，否则必须严格递增且 ≤ partCount；已 ready 返回 1005。
+- `complete`（含分片）通过 `HeadObject` 校验对象存在、实际大小与 Content-Type，通过后置 ready，重复调用幂等。
+- 访问 URL 仅限本人且 ready 的文件现签，GET URL 默认 15 分钟；头像例外：`avatar_key` 由服务端解析为 `public_endpoint/bucket/key` 的稳定公开 URL（`avatarUrl`），部署侧需对 `public/` 命名空间开放匿名 GET。
+- 删除为软删并尽力删除对象；pending 分片上传执行 Abort；对象删除失败只记日志，由清理任务（⏳，按 `expires_at` / `status=deleted` / 残留 upload_id）回收。
+- 对象存储未配置时接口返回 9002，不影响服务启动。
 
 ### 8.7 通知 `/notifications`（⏳ 规划中，未注册路由）
 
@@ -1275,15 +1295,18 @@ Web 客户端每 30s 检查一次：IM token 剩余 < 5 分钟 → POST /im/toke
 
 SDK 本身没有宿主 token 回调；续期由客户端定时器驱动（`goim-web-chat` 的 `startImTokenRenewal`），因此不涉及 TokenProvider 改造。
 
-### 9.4 头像上传（⏳ 规划中）
+### 9.4 头像上传与访问（✅ 已实现，公开读前缀待部署）
 
 ```
-PUT /files/presign {purpose:avatar} → fileId + PUT URL
+POST /files/presign {purpose:avatar} → fileId + objectKey + PUT URL
 client ──直传──▶ RustFS
-POST /files/{id}/complete → HeadObject 校验 size/mime/sha256 → status=ready
-PUT /profile/me {avatarFileId} → 更新 account_users.avatar_key → outbox 同步 goim
-GET /profile/me → 现签 GET URL 返回 avatarUrl
+POST /files/{id}/complete → HeadObject 校验 size/mime → status=ready
+PUT /profile/me {avatarKey: objectKey} → 落 account_users.avatar_key → outbox 同步 goim（faceURL=公开 URL）
+GET /profile/me、GET /profile/users/{id}、POST /profile/batch → 返回 avatarUrl（稳定公开 URL）
 ```
+
+`avatar_key` 仍只存对象 key（`public/avatar/...`），完整 URL 由 `storage.public_endpoint + bucket + key` 在读取时生成；
+部署侧必须对 `public/` 命名空间开放匿名读，其他前缀仍只允许预签名访问；`PublicObjectURL` 会拒绝非 `public/` key，避免私有对象被误生成匿名地址。
 
 ### 9.5 业务公告（M6，⏳ 规划中）
 
@@ -1344,16 +1367,17 @@ POST /admin/announcements
 
 ### M3 资料 / 设备 / 客户端配置（✅ 代码闭环；联调验收待环境）
 
-- `/profile`（最小）：✅ `GET/PUT /profile/me`、`POST /profile/batch`、`GET /profile/users/{userId}`；资料以 MySQL 为事实源，更新事务内写 `profile_sync` outbox，提交后即时同步 goim，失败按退避补偿；IM 账号未开通时由 worker 等待开通完成后再同步。头像当前只存 `avatar_key`，URL 仅当本身是 `http(s)` 地址时才作为 faceURL 下发。
+- `/profile`（最小）：✅ `GET/PUT /profile/me`、`POST /profile/batch`、`GET /profile/users/{userId}`；资料以 MySQL 为事实源，更新事务内写 `profile_sync` outbox，提交后即时同步 goim，失败按退避补偿；IM 账号未开通时由 worker 等待开通完成后再同步。头像当前存 `avatar_key`（对象 key），读取时解析为稳定公开 `avatarUrl` 供他人访问，IM 同步使用同一公开 URL。
 - `/devices`：✅ `account_devices` + `GET /devices`、`DELETE /devices/{deviceId}`；设备随注册/登录自动登记，移除设备同时撤销该设备全部会话并清理 Redis 活跃标记。
 - `/client-config`：✅ `client_configs` + `GET /client-config`（版本化 ETag、304）、`GET /client-config/schema`；配置表缺失回退内置默认值。
 - 验收：配置版本递增、304 生效、设备列表可踢出已由单测覆盖；改昵称/头像后另一客户端可见 ⏳ 待联调环境。
 
-### M4 文件（仅头像）+ 首版发布门禁（⏳ 未开始）
+### M4 文件（头像 + 分片附件）+ 首版发布门禁（⏳ 清理任务待做）
 
-- RustFS 预签名、complete 校验、访问 URL、头像配额、孤儿清理。
-- 验收：头像全链路；超大/非法类型被拒；未 complete 的对象 24h 清理。
-- **首版门禁**：M0-M4 全部通过、Web 端完成 token 改造、压测与回滚演练通过后即可发布；B 档未实现不影响发布。当前 M2 代码闭环完成（后端 + Web 客户端），仅差联调环境上的端到端验收；M3 资料/设备/客户端配置代码闭环已完成，M4 未开始，尚不满足发布门禁。
+- RustFS 预签名、complete 校验、访问 URL、头像配额、分片上传、孤儿清理。
+- 验收：头像全链路；大文件分片上传/合并/取消；超大/非法类型被拒；未 complete 的对象 24h 清理。
+- 当前进度：头像单文件、附件分片（8MB/片、≤200MB）、complete 二次校验、abort、软删与配额已实现（✅）；孤儿清理任务（cron）待实现；环境就绪后需联调头像与分片全链路。
+- **首版门禁**：M0-M4 全部通过、Web 端完成 token 改造、压测与回滚演练通过后即可发布；B 档未实现不影响发布。当前 M2 代码闭环完成（后端 + Web 客户端），仅差联调环境上的端到端验收；M3 资料/设备/客户端配置代码闭环已完成，M4 文件上传（含分片）接口已实现，尚不满足发布门禁。
 
 ### M5 上线加固（⏳ 未开始，与 M4 并行收尾）
 

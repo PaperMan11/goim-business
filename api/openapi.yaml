@@ -3,7 +3,7 @@ info:
   title: goim-business API
   version: 1.0.0
   description: |
-    goim-business 账号域、IM 凭证、用户资料、设备与客户端配置的 OpenAPI 契约，只描述当前已注册的 18 个 operation（17 条路径）。
+    goim-business 账号域、IM 凭证、用户资料、设备、客户端配置与文件直传（含分片上传）的 OpenAPI 契约，只描述当前已注册的 25 个 operation（24 条路径）。
 
     **统一响应约定**：除 `GET /client-config` 命中 ETag 时返回 304 外，所有接口的 HTTP 状态码恒为 200，
     业务结果一律由响应体 `code` 判断：`0` 表示成功，非 `0` 为业务错误码，错误提示见 `msg`，`data` 可能为空或携带明细。
@@ -27,6 +27,8 @@ tags:
     description: 我的设备列表与移除设备（设备随登录/注册自动登记）
   - name: ClientConfig
     description: 客户端启动配置、ETag 缓存与配置项元数据
+  - name: File
+    description: 文件直传签名、完成校验、访问地址与删除（客户端直传对象存储）
 
 servers:
   - url: /api/v1
@@ -226,7 +228,8 @@ paths:
       operationId: getMyProfile
       summary: 查询本人资料
       description: |
-        返回当前用户的完整资料：登录名、昵称、头像 key 与签名。
+        返回当前用户的完整资料：登录名、昵称、头像 key/URL 与签名。
+        `avatarUrl` 是稳定公开地址，客户端直接渲染；为空表示未设置头像。
         错误码：1002 未认证或登录态已失效、1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。
       security:
         - bearerAuth: []
@@ -240,6 +243,7 @@ paths:
       description: |
         只更新请求体中出现的字段，未出现的字段保持不变；三个字段全部缺省返回 1001。
         昵称不能为空；头像 key 与签名传空字符串表示清空。
+        `avatarKey` 传 `/files/presign` 或 complete 返回的 `objectKey`，服务端会解析为公开 `avatarUrl`。
         资料变更与 IM 同步任务在同一事务提交，提交后若 IM 已开通则即时同步 goim；
         IM 未开通时任务退避重试，开通完成后自动补齐。
         错误码：1001 参数错误、1002 未认证或登录态已失效、1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。
@@ -261,7 +265,7 @@ paths:
       operationId: batchProfiles
       summary: 批量查询公开资料
       description: |
-        按 userId 批量返回公开资料（仅昵称与头像 key），单次最多 100 个；
+        按 userId 批量返回公开资料（昵称、头像 key 与公开 avatarUrl），单次最多 100 个；
         不存在的用户直接跳过，不报错。userId 非数字返回 1001。
         错误码：1001 参数错误、1002 未认证或登录态已失效、9001 服务内部错误、9002 依赖服务不可用。
       security:
@@ -370,6 +374,174 @@ paths:
         '200':
           $ref: '#/components/responses/ClientConfigSchemaOK'
 
+  /files/presign:
+    post:
+      tags: [File]
+      operationId: presignFileUpload
+      summary: 申请文件直传
+      description: |
+        校验 purpose / mime / size 后生成服务端对象键与 PUT 预签名 URL，记录以 pending 状态落库。
+        客户端按返回的 method、uploadUrl 与 headers 直接上传对象字节，服务端不代理文件内容。
+        首版仅支持头像：purpose=avatar，mime 限 jpeg/png/webp，size ≤ 5MB。
+        pending 记录 24 小时未完成时由清理任务回收。
+        错误码：1001 参数错误、1002 未认证或登录态已失效、
+        9001 服务内部错误、9002 依赖服务不可用（对象存储未配置时同样返回 9002）。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FilePresignRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/FilePresignOK'
+
+  /files/multipart/presign:
+    post:
+      tags: [File]
+      operationId: presignMultipartUpload
+      summary: 申请分片上传
+      description: |
+        仅 attachment 用途支持，适用于 8MB 以上、200MB 以内的文件。
+        服务端初始化 S3 Multipart 上传并一次返回全部分片预签名 URL；客户端逐片 PUT 后调用 complete。
+        分片大小 8MB，分片数上限 100；分片签名默认 2 小时（storage.multipart_presign_expire），
+        过期后可调用 /files/{fileId}/multipart/parts 刷新；pending 记录 24 小时未完成时由清理任务回收。
+        错误码：1001 参数错误（用途/MIME/大小不合法）、1002 未认证或登录态已失效、
+        9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultipartPresignRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/MultipartPresignOK'
+
+  /files/{fileId}/multipart/complete:
+    post:
+      tags: [File]
+      operationId: completeMultipartUpload
+      summary: 完成分片上传
+      description: |
+        校验分片数量与顺序后合并分片，并再次 HeadObject 校验总大小与 Content-Type，通过后置为 ready。
+        分片 ETag 取每片 PUT 响应头 ETag 原值；重复完成已 ready 的文件幂等返回。
+        错误码：1001 参数错误（分片缺失/顺序错误/对象校验失败）、1002 未认证或登录态已失效、
+        1004 资源不存在、1005 状态冲突、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FileID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultipartCompleteRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/FileOK'
+
+  /files/{fileId}/multipart/abort:
+    post:
+      tags: [File]
+      operationId: abortMultipartUpload
+      summary: 取消分片上传
+      description: |
+        放弃未完成的分片上传并软删记录；已 ready 的文件不允许取消。
+        错误码：1001 参数错误、1002 未认证或登录态已失效、
+        1004 资源不存在、1005 状态冲突、9001 服务内部错误。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FileID'
+      responses:
+        '200':
+          $ref: '#/components/responses/EmptyOK'
+
+  /files/{fileId}/multipart/parts:
+    post:
+      tags: [File]
+      operationId: refreshMultipartPartURLs
+      summary: 刷新分片上传签名
+      description: |
+        为未完成的分片上传重新签发分片 PUT URL；复用原 uploadId 与 objectKey，不产生新记录，
+        已上传分片保持不变。partNumbers 为空表示刷新全部分片；分片号必须严格递增且不超过 partCount。
+        分片签名有效期由 storage.multipart_presign_expire 控制（默认 2 小时），单文件与 GET 仍为 15 分钟。
+        已 ready 的文件返回 1005，他人或已删除文件返回 1004。
+        错误码：1001 参数错误（分片号非法/不支持分片）、1002 未认证或登录态已失效、
+        1004 资源不存在、1005 状态冲突、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FileID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultipartPartsRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/MultipartPresignOK'
+
+  /files/{fileId}/complete:
+    post:
+      tags: [File]
+      operationId: completeFileUpload
+      summary: 完成上传校验
+      description: |
+        读取对象存储元数据，校验对象存在、实际大小 ≤ 用途上限且 Content-Type 与申请一致，
+        通过后把记录从 pending 置为 ready；重复调用已 ready 的文件幂等返回。
+        错误码：1001 参数错误（含对象未上传、大小或类型不符）、1002 未认证或登录态已失效、
+        1004 资源不存在、1005 状态冲突、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FileID'
+      responses:
+        '200':
+          $ref: '#/components/responses/FileOK'
+
+  /files/{fileId}/url:
+    get:
+      tags: [File]
+      operationId: getFileURL
+      summary: 获取文件访问地址
+      description: |
+        仅本人且状态为 ready 的文件可换取短时预签名 GET URL；他人或已删除文件返回 1004。
+        错误码：1001 参数错误（文件未就绪）、1002 未认证或登录态已失效、
+        1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FileID'
+      responses:
+        '200':
+          $ref: '#/components/responses/FileURLOK'
+
+  /files/{fileId}:
+    delete:
+      tags: [File]
+      operationId: deleteFile
+      summary: 删除文件
+      description: |
+        软删本人文件并尽力删除对象存储对象；重复删除幂等。
+        对象删除失败只记录日志，由清理任务按 deleted 状态回收。
+        错误码：1001 参数错误、1002 未认证或登录态已失效、
+        1004 资源不存在、1005 状态冲突、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/FileID'
+      responses:
+        '200':
+          $ref: '#/components/responses/EmptyOK'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -403,6 +575,16 @@ components:
         minLength: 1
         maxLength: 64
       example: web-device-001
+
+    FileID:
+      name: fileId
+      in: path
+      required: true
+      description: 申请上传时返回的文件 ID（十进制数字字符串）。
+      schema:
+        type: string
+        pattern: '^[1-9][0-9]*$'
+      example: "18"
 
     XClientVersion:
       name: X-Client-Version
@@ -592,6 +774,62 @@ components:
           example: '"cfg-5-1"'
         X-Request-ID:
           $ref: '#/components/headers/XRequestID'
+
+    FilePresignOK:
+      description: |
+        成功时 data 为 FilePresignResponse（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/FilePresignResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    MultipartPresignOK:
+      description: |
+        成功时 data 为 MultipartPresignResponse（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/MultipartPresignResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    FileOK:
+      description: |
+        成功时 data 为 FileView（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/FileResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
+    FileURLOK:
+      description: |
+        成功时 data 为 FileURLResponse（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/FileURLResult'
+              - $ref: '#/components/schemas/ErrorResponse'
 
   schemas:
     RegisterRequest:
@@ -927,7 +1165,7 @@ components:
     ProfileView:
       type: object
       description: 当前用户的完整资料。
-      required: [userId, loginName, nickname, avatarKey, bio]
+      required: [userId, loginName, nickname, avatarKey, avatarUrl, bio]
       properties:
         userId:
           type: string
@@ -943,9 +1181,16 @@ components:
         avatarKey:
           type: string
           description: |
-            头像对象 key（不直接对外提供访问地址，展示前需换取 URL）。
+            头像对象 key，用于更新资料时回传，不直接对外使用。
             为空表示未设置头像。
-          example: "avatar/2026/11/123456789.png"
+          example: "public/avatar/123/0198c2f0....png"
+        avatarUrl:
+          type: string
+          format: uri
+          description: |
+            头像公开访问 URL，由 avatarKey 解析得到；为空表示未设置头像。
+            该地址稳定不过期，任何人可直接 GET（仅 public/ 命名空间由部署侧开放匿名读）。
+          example: "https://files.example.com/goim-business/public/avatar/123/0198c2f0....png"
         bio:
           type: string
           description: 个性签名；最长 255 个字符，为空表示未设置。
@@ -954,7 +1199,7 @@ components:
     PublicProfileView:
       type: object
       description: 他人可见的公开资料，不含登录名与签名。
-      required: [userId, nickname, avatarKey]
+      required: [userId, nickname, avatarKey, avatarUrl]
       properties:
         userId:
           type: string
@@ -966,7 +1211,13 @@ components:
         avatarKey:
           type: string
           description: 头像对象 key；为空表示未设置头像。
-          example: "avatar/2026/11/123456789.png"
+          example: "public/avatar/123/0198c2f0....png"
+        avatarUrl:
+          type: string
+          format: uri
+          description: |
+            头像公开访问 URL；为空表示未设置头像。客户端直接渲染该地址，无需再换取签名 URL。
+          example: "https://files.example.com/goim-business/public/avatar/123/0198c2f0....png"
 
     UpdateProfileRequest:
       type: object
@@ -981,9 +1232,11 @@ components:
           example: Alice
         avatarKey:
           type: string
-          description: 头像对象 key；最长 255 个字符。
+          description: |
+            头像对象 key，取 `/files/presign` 或 complete 返回的 `objectKey`；最长 255 个字符。
+            服务端据此生成公开 `avatarUrl`，传空字符串表示清空头像。
           maxLength: 255
-          example: "avatar/2026/11/123456789.png"
+          example: "public/avatar/123/0198c2f0....png"
         bio:
           type: string
           description: 个性签名；最长 255 个字符。
@@ -1059,6 +1312,319 @@ components:
           example: success
         data:
           $ref: '#/components/schemas/PublicProfileView'
+
+    FilePresignRequest:
+      type: object
+      description: 申请文件直传；对象键由服务端生成，客户端不可指定。
+      required: [purpose, mime, size]
+      properties:
+        purpose:
+          type: string
+          description: 文件用途；首版仅支持 avatar。
+          enum: [avatar]
+          example: avatar
+        fileName:
+          type: string
+          maxLength: 255
+          description: 客户端原始文件名，仅用于展示，不参与对象路径。
+          example: me.png
+        mime:
+          type: string
+          description: 文件类型；必须与实际上传的 Content-Type 一致。
+          enum: ["image/jpeg", "image/png", "image/webp"]
+          example: image/png
+        size:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 5242880
+          description: 文件字节数；头像上限 5MB。
+          example: 120000
+        sha256:
+          type: string
+          pattern: '^[0-9a-fA-F]{64}$'
+          description: 可选的文件 SHA-256 十六进制摘要。
+          example: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+
+    FilePresignResponse:
+      type: object
+      description: 直传签名信息；客户端按键值直接请求对象存储。
+      required: [fileId, objectKey, uploadUrl, method, expiresAt]
+      properties:
+        fileId:
+          type: string
+          example: "18"
+        objectKey:
+          type: string
+          description: |
+            bucket 内对象路径。公开资源位于 `public/<purpose>/<ownerID>/`（如头像），
+            私有资源位于 `<purpose>/<ownerID>/`（如附件）。
+          example: public/avatar/123/file_0198c2f0-6c1a-7b3e-9d4f-abcdef012345.png
+        uploadUrl:
+          type: string
+          format: uri
+          description: 预签名上传地址，有效期见 expiresAt。
+          example: "https://files.example.com/goim-business/public/avatar/123/0198c2f0....png?X-Amz-Algorithm=..."
+        method:
+          type: string
+          enum: [PUT]
+          example: PUT
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: 上传时必须携带的请求头（例如 Content-Type）。
+          example: {"Content-Type": "image/png"}
+        expiresAt:
+          type: integer
+          format: int64
+          description: 预签名 URL 过期时间（Unix 秒）。
+          example: 1763000600
+
+    FilePresignResult:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/FilePresignResponse'
+
+    FileView:
+      type: object
+      description: 文件元数据；状态 0 待上传、1 可用、2 已删除。
+      required: [fileId, purpose, objectKey, mime, size, status, createdAt]
+      properties:
+        fileId:
+          type: string
+          example: "18"
+        purpose:
+          type: string
+          example: avatar
+        objectKey:
+          type: string
+          description: |
+            bucket 内对象路径；公开资源为 `public/<purpose>/...`，私有资源为 `<purpose>/...`。
+          example: public/avatar/123/file_0198c2f0-6c1a-7b3e-9d4f-abcdef012345.png
+        mime:
+          type: string
+          example: image/png
+        size:
+          type: integer
+          format: int64
+          example: 120000
+        sha256:
+          type: string
+          example: ""
+        status:
+          type: integer
+          format: int32
+          enum: [0, 1, 2]
+          example: 1
+        createdAt:
+          type: string
+          format: date-time
+          example: "2026-11-17T10:00:00+08:00"
+
+    FileResult:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/FileView'
+
+    FileURLResponse:
+      type: object
+      description: 短时文件访问地址。
+      required: [url, expiresAt]
+      properties:
+        url:
+          type: string
+          format: uri
+          example: "https://files.example.com/goim-business/attachment/123/a.pdf?X-Amz-Signature=..."
+        expiresAt:
+          type: integer
+          format: int64
+          description: 访问地址过期时间（Unix 秒）。
+          example: 1763000600
+
+    FileURLResult:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/FileURLResponse'
+
+    MultipartPresignRequest:
+      type: object
+      description: 申请分片上传；仅 attachment 用途，8MB < size ≤ 200MB。
+      required: [purpose, mime, size]
+      properties:
+        purpose:
+          type: string
+          enum: [attachment]
+          example: attachment
+        fileName:
+          type: string
+          maxLength: 255
+          example: report.pdf
+        mime:
+          type: string
+          description: 附件类型白名单。
+          enum:
+            - "image/jpeg"
+            - "image/png"
+            - "image/webp"
+            - "image/gif"
+            - "application/pdf"
+            - "application/zip"
+            - "text/plain"
+            - "video/mp4"
+            - "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            - "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            - "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+          example: application/pdf
+        size:
+          type: integer
+          format: int64
+          minimum: 8388609
+          maximum: 209715200
+          description: 文件总字节数；超过 8MB 才需要分片，最大 200MB。
+          example: 12582912
+        sha256:
+          type: string
+          pattern: '^[0-9a-fA-F]{64}$'
+          example: ""
+
+    MultipartPartPresign:
+      type: object
+      required: [partNumber, url, expiresAt]
+      properties:
+        partNumber:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 100
+          example: 1
+        url:
+          type: string
+          format: uri
+          description: 分片 PUT 预签名地址。
+          example: "https://files.example.com/goim-business/attachment/123/file_....pdf?partNumber=1&X-Amz-Signature=..."
+        expiresAt:
+          type: integer
+          format: int64
+          description: 预签名过期时间（Unix 秒）。
+          example: 1763000600
+
+    MultipartPartsRequest:
+      type: object
+      description: 刷新分片签名；不传 partNumbers 表示刷新全部分片。
+      properties:
+        partNumbers:
+          type: array
+          description: 需要刷新的分片号，必须严格递增且不超过 partCount。
+          minItems: 1
+          maxItems: 100
+          items:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+          example: [1, 2]
+
+    MultipartPresignResponse:
+      type: object
+      required: [fileId, objectKey, uploadId, partSize, partCount, parts, expiresAt]
+      properties:
+        fileId:
+          type: string
+          example: "21"
+        objectKey:
+          type: string
+          example: attachment/123/file_0198c2f0-6c1a-7b3e-9d4f-abcdef012345.pdf
+        uploadId:
+          type: string
+          description: S3 Multipart 上传 ID；complete/abort 由服务端按 fileId 查找，无需回传。
+          example: "2~abc123..."
+        partSize:
+          type: integer
+          format: int64
+          example: 8388608
+        partCount:
+          type: integer
+          format: int32
+          example: 2
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/MultipartPartPresign'
+        expiresAt:
+          type: integer
+          format: int64
+          description: 全部分片 URL 的统一过期时间（Unix 秒）。
+          example: 1763000600
+
+    MultipartPresignResult:
+      type: object
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/MultipartPresignResponse'
+
+    MultipartCompletedPart:
+      type: object
+      required: [partNumber, etag]
+      properties:
+        partNumber:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 100
+          example: 1
+        etag:
+          type: string
+          maxLength: 128
+          description: 分片 PUT 响应头 ETag 的原值（通常带双引号）。
+          example: "\"d41d8cd98f00b204e9800998ecf8427e\""
+
+    MultipartCompleteRequest:
+      type: object
+      required: [parts]
+      properties:
+        parts:
+          type: array
+          minItems: 1
+          maxItems: 100
+          description: 必须与服务端返回的 partCount 一致，且 partNumber 从 1 连续递增。
+          items:
+            $ref: '#/components/schemas/MultipartCompletedPart'
 
     DeviceView:
       type: object

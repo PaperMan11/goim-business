@@ -266,7 +266,7 @@ func TestRegisterUserIdempotentWhenUserAlreadyExists(t *testing.T) {
 	defer srv.Close()
 
 	c := New(Config{BaseURL: srv.URL, AdminUserID: "admin", AdminSecret: "secret"})
-	require.NoError(t, c.RegisterUser(context.Background(), UserInfo{UserID: "1"}))
+	require.ErrorIs(t, c.RegisterUser(context.Background(), UserInfo{UserID: "1"}), ErrUserAlreadyExists)
 
 	_, registerCalls, _ := rec.counts()
 	require.Equal(t, 1, registerCalls)

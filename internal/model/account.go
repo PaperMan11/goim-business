@@ -50,7 +50,7 @@ func (Credential) TableName() string { return "account_credentials" }
 type Session struct {
 	ID          int64      `gorm:"column:id;primaryKey;autoIncrement"`
 	UserID      int64      `gorm:"column:user_id"`
-	FamilyID    string     `gorm:"column:family_id;size:36"`
+	FamilyID    string     `gorm:"column:family_id;size:40"`
 	RefreshHash string     `gorm:"column:refresh_hash;size:64"`
 	RotatedFrom *int64     `gorm:"column:rotated_from"`
 	Platform    int8       `gorm:"column:platform"`

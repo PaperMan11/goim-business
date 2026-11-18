@@ -16,7 +16,7 @@ func RequestID() gin.HandlerFunc {
 			rid = strings.TrimSpace(c.GetHeader("operationID"))
 		}
 		if rid == "" || len(rid) > 128 {
-			rid = idgen.MustNew()
+			rid = idgen.MustNewWithPrefix(idgen.PrefixRequest)
 		}
 		c.Set(CtxRequestID, rid)
 		c.Header("X-Request-ID", rid)

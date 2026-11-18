@@ -68,12 +68,15 @@ func NewCronApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*Cron
 	})
 
 	return &CronApp{
-		Config:     cfg,
-		Logger:     log,
-		SQLDB:      sqlDB,
-		Redis:      rdb,
-		IM:         im,
-		Worker:     imjob.NewWorker(accountrepo.NewUserRepo(db), imClient{client: im}, outboxrepo.New(db), cfg.IM.OutboxBatchSize, timex.Now, log.Sugar()),
+		Config: cfg,
+		Logger: log,
+		SQLDB:  sqlDB,
+		Redis:  rdb,
+		IM:     im,
+		Worker: imjob.NewWorker(accountrepo.NewUserRepo(db), imClient{client: im}, outboxrepo.New(db), cfg.IM.OutboxBatchSize, timex.Now, log.Sugar(),
+			imjob.WithAvatarURL(func(objectKey string) string {
+				return cfg.Storage.PublicObjectURL(objectKey)
+			})),
 		Locker:     redislock.NewRedisLocker(rdb, lock.WithDefaultTTL(cronLockTTL), lock.WithRetryStrategy(lock.NoRetry())),
 		LockPrefix: fmt.Sprintf("%s:%s:cron", cfg.Redis.KeyPrefix, cfg.Env),
 	}, nil

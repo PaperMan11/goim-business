@@ -1,6 +1,6 @@
-# 前端对接：设备标识与请求头
+# 前端对接：设备标识、请求头与文件上传
 
-本文说明前端（Web / 桌面 / 移动端）如何生成与传递设备标识，以及调用账号接口时的请求头约定。接口字段以 `api/openapi.yaml` 为准。
+本文说明前端（Web / 桌面 / 移动端）如何生成与传递设备标识，以及调用账号接口时的请求头约定；§8 为分片上传与签名刷新，§9 为头像上传与公开访问。接口字段以 `api/openapi.yaml` 为准。
 
 ## 1. 请求头约定
 
@@ -110,3 +110,110 @@ await fetch(`${API_BASE}/devices/${encodeURIComponent(deviceId)}`, {
 - 旧客户端如果把 `deviceId` 放在请求体，新服务端会忽略该字段并因缺少 `X-Device-Id` 返回 `1001`；升级前端时必须同时改为请求头传递。
 - 注册/登录的响应结构未变化，仍为 `{ code, msg, data: { user, token, refreshToken, refreshExpiresIn, sessionId, platform } }`。
 - 服务端只在注册/登录时读取设备头；其他接口即使携带也不会覆盖 token 中的 `deviceId/platform`。
+
+## 8. 大文件分片上传与重试
+
+附件（`purpose=attachment`）超过 8MB 时使用分片上传，最大 200MB，固定 8MB/片、最多 100 片。头像等小文件仍走单文件 PUT。
+
+### 8.1 整体流程
+
+1. `POST /files/multipart/presign` 申请上传，响应包含 `fileId / objectKey / uploadId / partSize / partCount / parts[]`。
+2. 按 `parts[].url` 逐片 `PUT`（建议 3–4 并发），每片的 `Content-Type` 必须与申请一致；PUT 成功后保存响应头 `ETag` 原值（通常带双引号）。
+3. 全部分片成功后 `POST /files/{fileId}/multipart/complete`，请求体上报 `parts: [{ partNumber, etag }]`，顺序必须从 1 连续递增。
+4. 用户取消时调用 `POST /files/{fileId}/multipart/abort`；`DELETE /files/{fileId}` 也会终止未完成的分片上传。
+
+`uploadId` 由服务端随 `fileId` 落库，complete/abort/刷新都只需 `fileId`，客户端无需回传。
+
+### 8.2 签名有效期
+
+- 分片 PUT URL：默认 **2 小时**（`storage.multipart_presign_expire`）。
+- 单文件 PUT 与 `GET /files/{fileId}/url`：默认 **15 分钟**（`storage.presign_expire`）。
+- pending 记录保留 24 小时；超时未完成的上传会被服务端清理，客户端需要重新申请。
+
+### 8.3 分片失败与续期
+
+分片 PUT 返回 **403**（`Request has expired` / `AccessDenied`）通常是签名过期，不是文件内容错误。不要重新调用 `multipart/presign`（会创建新记录、丢失已传分片），改为刷新失败分片的签名：
+
+```js
+// 只刷新失败的分片；partNumbers 省略表示刷新全部
+await fetch(`${API_BASE}/files/${fileId}/multipart/parts`, {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ partNumbers: [2, 5] }),
+});
+```
+
+响应结构与 `multipart/presign` 相同，复用原 `uploadId / objectKey / partSize / partCount`，已上传分片保持不变。刷新后只重试对应分片。
+
+重试建议：
+
+- 单分片最多重试 3 次，指数退避（约 1s / 2s / 4s）；仅对网络错误、5xx 与上面提到的 403 重试。
+- 4xx（除签名过期）如 400/403 内容校验失败不要盲目重试，先检查 `Content-Type` 与分片大小。
+- 分片签名还有效时不要频繁刷新；可在本地记录 `parts[].expiresAt`，临近过期或收到 403 时再刷新。
+- 重试仍失败时调用 `abort`，再重新 `multipart/presign`；也可直接把失败信息提示给用户。
+
+### 8.4 complete 与状态冲突
+
+- `complete` 是幂等的：重复调用或网络超时后重试，已 ready 的文件会直接返回成功。
+- 刷新接口对已 ready 的文件返回 `1005`，表示无需刷新；前端应改为调用 `complete` 或直接按成功处理。
+- 若刷新/complete 返回 `1004` 或提示上传任务不存在，说明 pending 已超时被清理，只能重新申请分片上传。
+- pending 记录超过 24 小时会失效，长时间离线续传前建议先刷新；仍失败则重新申请。
+
+### 8.5 错误码速查
+
+| 场景 | code | 处理 |
+|---|---|---|
+| 分片号越界/非递增、超出 8MB–200MB、MIME 不支持 | `1001` | 修正请求参数，不要重试 |
+| 未登录或登录态失效 | `1002` | 清理令牌并重新登录 |
+| 文件不存在、他人文件、pending 已清理 | `1004` | 重新申请上传 |
+| 已 ready 还调用刷新，或状态已变化 | `1005` | 按成功处理或先查询状态 |
+| 对象存储不可用 | `9002` | 退避后重试，持续失败则提示稍后再试 |
+
+## 9. 头像上传与公开访问
+
+头像走**单文件上传**，并且是**公开资源**，不要使用附件那套“仅本人现签 URL”的方式。
+
+### 9.1 上传流程
+
+1. `POST /files/presign`，请求体：
+   ```json
+   { "purpose": "avatar", "fileName": "me.png", "mime": "image/png", "size": 120000 }
+   ```
+   响应中的 `objectKey` 就是要写回资料的 key。
+2. 按 `uploadUrl` + `headers` 直接 `PUT` 文件到对象存储。
+3. `POST /files/{fileId}/complete`，服务端校验后置为 ready。
+4. `PUT /profile/me`，请求体传 `{ "avatarKey": "<objectKey>" }`。
+
+注意：`PUT /profile/me` 传的是 `objectKey`（形如 `public/avatar/123/uuid.png`），不是文件名，也不是临时预签名 URL。
+
+### 9.2 其他人如何拿到 URL
+
+资料响应同时返回两个字段：
+
+- `avatarKey`：对象 key，仅用于更新资料时回传，不要直接渲染。
+- `avatarUrl`：**稳定、不过期的公开 URL**，前端直接作为 `<img src>` 使用。
+
+获取他人头像时，从这些接口读取 `avatarUrl`：
+
+- `GET /profile/users/{userId}`：单个用户公开资料。
+- `POST /profile/batch`：批量取公开资料（最多 100 个）。
+
+```json
+// POST /profile/batch response data 示例
+[
+  { "userId": "123", "nickname": "Alice",
+    "avatarKey": "public/avatar/123/0198c2f0....png",
+    "avatarUrl": "https://files.example.com/goim-business/public/avatar/123/0198c2f0....png" }
+]
+```
+
+`avatarUrl` 为空字符串表示未设置头像，前端展示默认头像即可。
+
+### 9.3 注意事项
+
+- `avatarUrl` 由服务端用 `storage.public_endpoint + bucket + avatarKey` 生成，任何客户端可直接 GET；**不要**再对它调用 `/files/{fileId}/url`。
+- 该方案要求部署侧对 `public/` 命名空间开放匿名 GET（bucket policy 或 Nginx 规则）；若直接访问返回 403，说明基础设施未配置，不是签名过期。
+- 他人可见性依赖 `avatarUrl`，因此 `PUT /profile/me` 后应重新拉取资料；不要缓存旧的 `avatarKey` 自行拼接域名。
+- goim 侧同步的 faceURL 也使用同一个公开 URL，聊天界面无需再换取签名。
+- 更新头像时先完成新文件上传与 complete，再更新资料；旧对象由清理任务按记录状态回收。
+- 附件（`purpose=attachment`）仍是私有资源，只对本人返回 15 分钟预签名 URL，二者不要混用。

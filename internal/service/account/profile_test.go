@@ -83,6 +83,40 @@ func TestUpdateProfileSyncsAvatarURL(t *testing.T) {
 	require.Equal(t, 2, env.provisioner.updateCallCount())
 }
 
+func TestAvatarObjectKeyResolvesToPublicURL(t *testing.T) {
+	env := newTestEnv(t, func(cfg *Config) {
+		cfg.AvatarURL = func(key string) string {
+			return "https://files.example.com/goim-business/" + key
+		}
+	})
+	env.provisioner.setEnabled(true)
+	ctx := context.Background()
+
+	resp, err := env.svc.Register(ctx, types.RegisterRequest{
+		LoginName: "alice",
+		Password:  testPassword,
+		DeviceID:  testDevice,
+		Platform:  testPlatform,
+	})
+	require.NoError(t, err)
+	userID := idOf(t, resp.User.UserID)
+
+	key := "public/avatar/123/a.png"
+	expected := "https://files.example.com/goim-business/" + key
+	view, err := env.svc.UpdateProfile(ctx, userID, types.UpdateProfileRequest{AvatarKey: &key})
+	require.NoError(t, err)
+	require.Equal(t, key, view.AvatarKey)
+	require.Equal(t, expected, view.AvatarURL)
+
+	_, _, _, gotAvatar := env.provisioner.lastUpdate()
+	require.Equal(t, expected, gotAvatar)
+
+	views, err := env.svc.Profiles(ctx, []int64{userID})
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Equal(t, expected, views[0].AvatarURL)
+}
+
 func TestUpdateProfileValidation(t *testing.T) {
 	env := newTestEnv(t, nil)
 	ctx := context.Background()

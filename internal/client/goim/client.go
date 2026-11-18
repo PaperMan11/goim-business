@@ -168,7 +168,7 @@ func (c *Client) post(ctx context.Context, method, path, token string, body any)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set(headerOperationID, idgen.MustNew())
+	req.Header.Set(headerOperationID, idgen.MustNewWithPrefix(idgen.PrefixOperation))
 	if token != "" {
 		req.Header.Set(headerToken, token)
 	}

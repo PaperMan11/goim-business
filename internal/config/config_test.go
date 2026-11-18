@@ -17,6 +17,24 @@ func TestLoadDev(t *testing.T) {
 	require.Equal(t, 5, cfg.Auth.MaxSessionsPerUser)
 }
 
+func TestStoragePublicObjectURL(t *testing.T) {
+	cfg := StorageConfig{
+		Endpoint:       "http://rustfs:9000",
+		PublicEndpoint: "https://files.example.com/",
+		Bucket:         "goim-business",
+	}
+	require.Equal(t,
+		"https://files.example.com/goim-business/public/avatar/123/a.png",
+		cfg.PublicObjectURL("public/avatar/123/a.png"))
+	require.Equal(t,
+		"https://files.example.com/goim-business/public/avatar/123/a.png",
+		cfg.PublicObjectURL("/public/avatar/123/a.png"))
+	require.Empty(t, cfg.PublicObjectURL("attachment/123/a.pdf"))
+	require.Empty(t, cfg.PublicObjectURL("avatar/123/a.png"))
+	require.Empty(t, cfg.PublicObjectURL(""))
+	require.Empty(t, StorageConfig{}.PublicObjectURL("public/avatar/123/a.png"))
+}
+
 func TestLoadEnvOverride(t *testing.T) {
 	t.Setenv("GOIM_BIZ_AUTH__JWT_SECRET", "env-provided-secret-0123456789")
 

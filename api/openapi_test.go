@@ -27,7 +27,7 @@ func TestOpenAPIAccountContract(t *testing.T) {
 	require.Equal(t, "/api/v1", mustMap(t, servers[0])["url"])
 
 	paths := mustMap(t, spec["paths"])
-	require.Len(t, paths, 17, "只允许描述 17 条路径：账号 7、IM 3、资料 3、设备 2、配置 2")
+	require.Len(t, paths, 25, "只允许描述 25 条路径：账号 7、IM 3、资料 3、设备 2、配置 2、文件 8")
 	for _, path := range []string{
 		"/account/register",
 		"/account/login",
@@ -46,6 +46,14 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		"/devices/{deviceId}",
 		"/client-config",
 		"/client-config/schema",
+		"/files/presign",
+		"/files/multipart/presign",
+		"/files/{fileId}/complete",
+		"/files/{fileId}/multipart/complete",
+		"/files/{fileId}/multipart/parts",
+		"/files/{fileId}/multipart/abort",
+		"/files/{fileId}/url",
+		"/files/{fileId}",
 	} {
 		require.Contains(t, paths, path)
 	}
@@ -73,6 +81,16 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		"DeviceView",
 		"ClientConfigResponse",
 		"ClientConfigSchemaResponse",
+		"FilePresignRequest",
+		"FilePresignResponse",
+		"FileView",
+		"FileURLResponse",
+		"MultipartPresignRequest",
+		"MultipartPartsRequest",
+		"MultipartPresignResponse",
+		"MultipartPartPresign",
+		"MultipartCompleteRequest",
+		"MultipartCompletedPart",
 		"ErrorResponse",
 	} {
 		require.Contains(t, schemas, name)
@@ -102,6 +120,14 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		{"/profile/users/{userId}", "get"},
 		{"/devices", "get"},
 		{"/devices/{deviceId}", "delete"},
+		{"/files/presign", "post"},
+		{"/files/multipart/presign", "post"},
+		{"/files/{fileId}/complete", "post"},
+		{"/files/{fileId}/multipart/complete", "post"},
+		{"/files/{fileId}/multipart/parts", "post"},
+		{"/files/{fileId}/multipart/abort", "post"},
+		{"/files/{fileId}/url", "get"},
+		{"/files/{fileId}", "delete"},
 	}
 	for _, route := range authed {
 		op := mustMap(t, mustMap(t, paths[route.path])[route.method])

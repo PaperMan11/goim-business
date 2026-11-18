@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	filedomain "goim-business/internal/domain/file"
+
 	"github.com/spf13/viper"
 )
 
@@ -24,6 +26,7 @@ type Config struct {
 	RateLimit RateLimitConfig `mapstructure:"ratelimit"`
 	CORS      CORSConfig      `mapstructure:"cors"`
 	IM        IMConfig        `mapstructure:"im"`
+	Storage   StorageConfig   `mapstructure:"storage"`
 }
 
 type ServerConfig struct {
@@ -98,6 +101,39 @@ type IMConfig struct {
 	OutboxScanInterval time.Duration `mapstructure:"outbox_scan_interval"`
 	// OutboxBatchSize 是单次扫描的最大任务条数。
 	OutboxBatchSize int `mapstructure:"outbox_batch_size"`
+}
+
+// StorageConfig 是 RustFS / S3 兼容对象存储的配置；endpoint 与 bucket 同时为空表示未启用。
+type StorageConfig struct {
+	Endpoint       string        `mapstructure:"endpoint"`
+	PublicEndpoint string        `mapstructure:"public_endpoint"`
+	AccessKey      string        `mapstructure:"access_key"`
+	SecretKey      string        `mapstructure:"secret_key"`
+	Region         string        `mapstructure:"region"`
+	Bucket         string        `mapstructure:"bucket"`
+	UsePathStyle   bool          `mapstructure:"use_path_style"`
+	PresignExpire  time.Duration `mapstructure:"presign_expire"`
+	// MultipartPresignExpire 是分片上传签名有效期；大文件弱网需要更长窗口。
+	MultipartPresignExpire time.Duration `mapstructure:"multipart_presign_expire"`
+}
+
+// Enabled 表示对象存储已配置。
+func (c StorageConfig) Enabled() bool {
+	return c.Endpoint != "" || c.Bucket != ""
+}
+
+// PublicObjectURL 返回公开命名空间下对象的稳定访问地址；非 public/ 前缀、未启用存储或 key 为空时返回空。
+// 头像等公开资源使用该地址直接访问，附件等私有资源仍走预签名 GET。
+func (c StorageConfig) PublicObjectURL(objectKey string) string {
+	if !c.Enabled() || objectKey == "" || !filedomain.IsPublicObjectKey(objectKey) {
+		return ""
+	}
+	base := c.PublicEndpoint
+	if base == "" {
+		base = c.Endpoint
+	}
+	key := strings.TrimLeft(strings.TrimSpace(objectKey), "/")
+	return strings.TrimRight(base, "/") + "/" + c.Bucket + "/" + key
 }
 
 // Load 按 env 加载配置：base.yaml → {env}.yaml → GOIM_BIZ_* 环境变量。
@@ -218,6 +254,11 @@ func (c *Config) Validate() error {
 	if c.Auth.LoginLockThreshold <= 0 || c.Auth.LoginLockWindow <= 0 {
 		return fmt.Errorf("auth.login_lock_threshold/login_lock_window 必须大于 0")
 	}
+	if c.Storage.Enabled() {
+		if err := validateStorage(c.Storage); err != nil {
+			return err
+		}
+	}
 	if c.IM.BaseURL != "" {
 		u, err := url.Parse(c.IM.BaseURL)
 		if err != nil {
@@ -235,6 +276,36 @@ func (c *Config) Validate() error {
 		if c.IM.OutboxBatchSize <= 0 {
 			return fmt.Errorf("im.outbox_batch_size 必须大于 0")
 		}
+	}
+	return nil
+}
+
+// validateStorage 校验对象存储配置：endpoint 与 bucket 必须同时存在，密钥通过环境变量注入。
+func validateStorage(s StorageConfig) error {
+	if s.Endpoint == "" || s.Bucket == "" {
+		return fmt.Errorf("storage.endpoint/storage.bucket 必须同时配置")
+	}
+	u, err := url.Parse(s.Endpoint)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("storage.endpoint 必须是带 host 的 http/https 地址: %s", s.Endpoint)
+	}
+	if s.PublicEndpoint != "" {
+		pu, err := url.Parse(s.PublicEndpoint)
+		if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
+			return fmt.Errorf("storage.public_endpoint 必须是带 host 的 http/https 地址: %s", s.PublicEndpoint)
+		}
+	}
+	if s.Region == "" {
+		return fmt.Errorf("storage.region 不能为空")
+	}
+	if s.AccessKey == "" || s.SecretKey == "" {
+		return fmt.Errorf("storage.access_key/secret_key 必填（secret 请通过 GOIM_BIZ_STORAGE__SECRET_KEY 注入）")
+	}
+	if s.PresignExpire <= 0 {
+		return fmt.Errorf("storage.presign_expire 必须大于 0")
+	}
+	if s.MultipartPresignExpire <= 0 {
+		return fmt.Errorf("storage.multipart_presign_expire 必须大于 0")
 	}
 	return nil
 }

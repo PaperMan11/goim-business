@@ -110,6 +110,78 @@ func TestRetryIMProvisionSucceeds(t *testing.T) {
 	require.NotNil(t, stored.IMSyncedAt)
 }
 
+func TestRetryIMProvisionSendsAvatar(t *testing.T) {
+	env := newTestEnv(t, func(cfg *Config) {
+		cfg.AvatarURL = func(objectKey string) string {
+			return "https://files.example.com/goim-business/" + objectKey
+		}
+	})
+	env.provisioner.setEnabled(true)
+	env.provisioner.setErr(errors.New("im 不可用"))
+	ctx := context.Background()
+
+	resp, err := env.svc.Register(ctx, types.RegisterRequest{
+		LoginName: "alice",
+		Password:  testPassword,
+		DeviceID:  testDevice,
+		Platform:  testPlatform,
+	})
+	require.NoError(t, err)
+	userID := idOf(t, resp.User.UserID)
+
+	avatarKey := "public/avatar/1/file_0198c2f0.png"
+	_, err = env.svc.UpdateProfile(ctx, userID, types.UpdateProfileRequest{AvatarKey: &avatarKey})
+	require.NoError(t, err)
+
+	// 开通重试时用户已有头像，注册请求应一并携带 faceURL，而不是等下一次资料同步。
+	env.provisioner.setErr(nil)
+	require.NoError(t, env.svc.RetryIMProvision(ctx, userID))
+
+	calls, gotUserID, gotNickname, gotAvatar := env.provisioner.lastRegister()
+	require.Equal(t, 2, calls)
+	require.Equal(t, "1", gotUserID)
+	require.Equal(t, "alice", gotNickname)
+	require.Equal(t, "https://files.example.com/goim-business/public/avatar/1/file_0198c2f0.png", gotAvatar)
+}
+
+func TestRetryIMProvisionSyncsProfileWhenUserAlreadyExists(t *testing.T) {
+	env := newTestEnv(t, func(cfg *Config) {
+		cfg.AvatarURL = func(objectKey string) string {
+			return "https://files.example.com/goim-business/" + objectKey
+		}
+	})
+	ctx := context.Background()
+
+	// IM 未启用时注册保持 Pending，先落一个头像再重试开通。
+	resp, err := env.svc.Register(ctx, types.RegisterRequest{
+		LoginName: "alice",
+		Password:  testPassword,
+		DeviceID:  testDevice,
+		Platform:  testPlatform,
+	})
+	require.NoError(t, err)
+	userID := idOf(t, resp.User.UserID)
+
+	avatarKey := "public/avatar/1/file_0198c2f0.png"
+	_, err = env.svc.UpdateProfile(ctx, userID, types.UpdateProfileRequest{AvatarKey: &avatarKey})
+	require.NoError(t, err)
+
+	// IM 侧账号已存在（如其他系统预建）：注册命中 1102，应补一次全量资料同步而不是直接标记完成。
+	env.provisioner.setEnabled(true)
+	env.provisioner.setErr(ports.ErrIMUserAlreadyExists)
+	require.NoError(t, env.svc.RetryIMProvision(ctx, userID))
+
+	stored, err := env.users.GetByID(ctx, userID)
+	require.NoError(t, err)
+	require.Equal(t, domain.IMStatusReady, stored.IMStatus)
+
+	updateCalls, _, gotNickname, gotAvatar := env.provisioner.lastUpdate()
+	require.Equal(t, 1, updateCalls)
+	require.Equal(t, "alice", gotNickname)
+	require.Equal(t, "https://files.example.com/goim-business/public/avatar/1/file_0198c2f0.png", gotAvatar)
+	require.Equal(t, 1, env.provisioner.callCount())
+}
+
 func TestRetryIMProvisionErrors(t *testing.T) {
 	ctx := context.Background()
 

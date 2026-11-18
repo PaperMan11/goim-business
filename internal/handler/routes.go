@@ -9,6 +9,7 @@ import (
 	"goim-business/internal/app"
 	"goim-business/internal/handler/account"
 	"goim-business/internal/handler/clientconfig"
+	"goim-business/internal/handler/file"
 	"goim-business/internal/middlewares"
 	"goim-business/internal/pkg/errcode"
 	"goim-business/internal/pkg/response"
@@ -41,6 +42,7 @@ func InitRoutes(a *app.App) *gin.Engine {
 
 	account.InitRoutes(baseRoute, a)
 	clientconfig.InitRoutes(baseRoute, a)
+	file.InitRoutes(baseRoute, a)
 
 	r.NoRoute(func(c *gin.Context) {
 		response.Abort(c, errcode.ErrNotFound.WithMessage("接口不存在"))
