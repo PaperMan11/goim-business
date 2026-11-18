@@ -25,6 +25,8 @@ const (
 	errorLimit = 512
 	// defaultBatchSize 是未配置批量大小时的兜底值。
 	defaultBatchSize = 20
+	// purgedNickname 是注销后写入 IM 的占位昵称；placeholder 模式不删除 IM 账号。
+	purgedNickname = "已注销用户"
 )
 
 // Worker 处理 IM 账号开通与 outbox 补偿，只依赖用户仓储、IM 客户端与 outbox 仓储。
@@ -117,6 +119,23 @@ func (w *Worker) SyncProfile(ctx context.Context, user *domain.User) error {
 	return nil
 }
 
+// Purge 把 IM 侧资料改为注销占位（昵称「已注销用户」、头像为空），并把 im_status 置为已注销。
+// 该方式只依赖 update_user_info，幂等可重放；失败返回错误交由 outbox 退避重试。
+func (w *Worker) Purge(ctx context.Context, user *domain.User) error {
+	purgeCtx := context.WithoutCancel(ctx)
+	userID := convert.ToString(user.ID)
+	if err := w.im.UpdateUserInfo(purgeCtx, userID, purgedNickname, ""); err != nil {
+		w.log.Warnf("IM 注销同步失败: user_id=%d, err=%v", user.ID, err)
+		return err
+	}
+	// 状态回写失败时返回错误，避免 outbox 提前完成导致后续资料同步覆盖占位资料。
+	if err := w.users.UpdateIMStatus(purgeCtx, user.ID, domain.IMStatusPurged, nil, w.now()); err != nil {
+		w.log.Errorf("回写 IM 注销状态失败: user_id=%d, err=%v", user.ID, err)
+		return err
+	}
+	return nil
+}
+
 // resolveAvatarURL 把头像 key 解析为可直接访问的稳定 URL；已是 http(s) 地址时原样返回。
 func (w *Worker) resolveAvatarURL(key string) string {
 	key = strings.TrimSpace(key)
@@ -184,13 +203,15 @@ func (w *Worker) RunDue(ctx context.Context) int {
 	return processed
 }
 
-// processEntry 按任务类型分发：provision_im 开通账号，profile_sync 同步资料。
+// processEntry 按任务类型分发：provision_im 开通账号，profile_sync 同步资料，purge_im_user 注销占位。
 func (w *Worker) processEntry(ctx context.Context, entry ports.OutboxEntry) {
 	switch entry.Action {
 	case ports.OutboxActionProvisionIM:
 		w.processProvision(ctx, entry)
 	case ports.OutboxActionProfileSync:
 		w.processProfile(ctx, entry)
+	case ports.OutboxActionPurgeIM:
+		w.processPurge(ctx, entry)
 	default:
 		w.log.Warnf("未知 IM outbox 任务: id=%d, action=%s", entry.ID, entry.Action)
 	}
@@ -206,11 +227,14 @@ func (w *Worker) processProvision(ctx context.Context, entry ports.OutboxEntry) 
 		w.retry(writeCtx, entry, err)
 		return
 	}
+	// 账号已进入注销流程，不再补开通，避免为已注销账号重建 IM 投影。
+	if user.Status == domain.StatusDeleting || user.Status == domain.StatusDeleted {
+		w.markDone(writeCtx, entry)
+		return
+	}
 	// 已开通成功（例如同步调用成功但标记失败）时不重复调用 goim。
-	if user.IMStatus == domain.IMStatusReady {
-		if err := w.outbox.MarkDone(writeCtx, entry.ID); err != nil {
-			w.log.Errorf("标记 IM outbox 完成失败: id=%d, user_id=%d, err=%v", entry.ID, entry.UserID, err)
-		}
+	if user.IMStatus == domain.IMStatusReady || user.IMStatus == domain.IMStatusPurged {
+		w.markDone(writeCtx, entry)
 		return
 	}
 
@@ -232,6 +256,11 @@ func (w *Worker) processProfile(ctx context.Context, entry ports.OutboxEntry) {
 		w.retry(writeCtx, entry, err)
 		return
 	}
+	// 账号已注销时不再同步资料，避免把占位昵称/头像覆盖回去。
+	if user.Status == domain.StatusDeleting || user.Status == domain.StatusDeleted {
+		w.markDone(writeCtx, entry)
+		return
+	}
 	if user.IMStatus != domain.IMStatusReady {
 		w.retry(writeCtx, entry, errProfileNotReady)
 		return
@@ -240,7 +269,37 @@ func (w *Worker) processProfile(ctx context.Context, entry ports.OutboxEntry) {
 		w.retry(writeCtx, entry, err)
 		return
 	}
-	if err := w.outbox.MarkDone(writeCtx, entry.ID); err != nil {
+	w.markDone(writeCtx, entry)
+}
+
+// processPurge 处理注销同步任务：IM 侧本来没有投影或已完成时直接结束，否则写入占位资料。
+func (w *Worker) processPurge(ctx context.Context, entry ports.OutboxEntry) {
+	writeCtx := context.WithoutCancel(ctx)
+
+	user, err := w.users.GetByID(writeCtx, entry.UserID)
+	if err != nil {
+		w.retry(writeCtx, entry, err)
+		return
+	}
+	// IM 账号从未开通或已完成注销占位：没有需要同步的投影，直接完成任务。
+	if user.IMStatus != domain.IMStatusReady && user.IMStatus != domain.IMStatusPurged {
+		w.markDone(writeCtx, entry)
+		return
+	}
+	if user.IMStatus == domain.IMStatusPurged {
+		w.markDone(writeCtx, entry)
+		return
+	}
+	if err := w.Purge(writeCtx, user); err != nil {
+		w.retry(writeCtx, entry, err)
+		return
+	}
+	w.markDone(writeCtx, entry)
+}
+
+// markDone 标记任务完成，失败只记日志。
+func (w *Worker) markDone(ctx context.Context, entry ports.OutboxEntry) {
+	if err := w.outbox.MarkDone(ctx, entry.ID); err != nil {
 		w.log.Errorf("标记 IM outbox 完成失败: id=%d, user_id=%d, err=%v", entry.ID, entry.UserID, err)
 	}
 }

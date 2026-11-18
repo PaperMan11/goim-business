@@ -84,6 +84,11 @@ func validConfig() *Config {
 			LoginLockThreshold:     10,
 			LoginLockWindow:        time.Minute,
 		},
+		Account: AccountConfig{
+			DeletionCooldown: 15 * 24 * time.Hour,
+			PurgeInterval:    time.Hour,
+			PurgeBatchSize:   50,
+		},
 	}
 }
 

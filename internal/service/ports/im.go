@@ -27,4 +27,6 @@ type IMClient interface {
 type IMTokenCache interface {
 	Get(ctx context.Context, userID string, platform int8) (token string, expireAt time.Time, ok bool, err error)
 	Set(ctx context.Context, userID string, platform int8, token string, expireAt time.Time, ttl time.Duration) error
+	// Delete 清除指定平台的缓存；注销时按平台逐个删除，不使用 SCAN。
+	Delete(ctx context.Context, userID string, platform int8) error
 }

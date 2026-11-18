@@ -454,6 +454,53 @@ func (f *fakeUsers) TouchLastLogin(_ context.Context, id int64, at time.Time) er
 	return nil
 }
 
+func (f *fakeUsers) MarkDeleting(_ context.Context, id int64, purgeAt, at time.Time) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	user, ok := f.byID[id]
+	if !ok || user.Status != domain.StatusNormal {
+		return false, nil
+	}
+	user.Status = domain.StatusDeleting
+	value := purgeAt
+	user.PurgeAt = &value
+	user.UpdatedAt = at
+	return true, nil
+}
+
+func (f *fakeUsers) ListDueForPurge(_ context.Context, now time.Time, limit int) ([]*domain.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var due []*domain.User
+	for _, user := range f.byID {
+		if user.Status != domain.StatusDeleting || user.PurgeAt == nil || user.PurgeAt.After(now) {
+			continue
+		}
+		clone := *user
+		due = append(due, &clone)
+		if limit > 0 && len(due) >= limit {
+			break
+		}
+	}
+	return due, nil
+}
+
+func (f *fakeUsers) MarkPurged(_ context.Context, id int64, loginName string, at time.Time) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	user, ok := f.byID[id]
+	if !ok || user.Status != domain.StatusDeleting {
+		return false, nil
+	}
+	user.Status = domain.StatusDeleted
+	user.LoginName = loginName
+	user.Nickname = ""
+	user.AvatarKey = ""
+	user.Bio = ""
+	user.UpdatedAt = at
+	return true, nil
+}
+
 func (f *fakeUsers) UpdateIMStatus(_ context.Context, id int64, status int8, syncedAt *time.Time, at time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -631,6 +678,13 @@ func (f *fakeIMTokenCache) Set(_ context.Context, userID string, platform int8, 
 	return nil
 }
 
+func (f *fakeIMTokenCache) Delete(_ context.Context, userID string, platform int8) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.entries, imTokenKey(userID, platform))
+	return nil
+}
+
 func (f *fakeIMTokenCache) seed(userID string, platform int8, token string, expireAt time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -673,6 +727,13 @@ func (f *fakeCreds) GetByUserID(_ context.Context, userID int64) (*domain.Creden
 	}
 	clone := *cred
 	return &clone, nil
+}
+
+func (f *fakeCreds) DeleteByUser(_ context.Context, userID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.byID, userID)
+	return nil
 }
 
 func (f *fakeCreds) UpdatePasswordHash(_ context.Context, userID int64, hash string, at time.Time) error {
@@ -808,6 +869,22 @@ func (f *fakeSessions) RevokeByDevice(_ context.Context, userID int64, deviceID 
 		sids = append(sids, session.ID)
 	}
 	return sids, nil
+}
+
+func (f *fakeSessions) DeleteByUser(_ context.Context, userID int64) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	kept := f.list[:0]
+	var removed int64
+	for _, session := range f.list {
+		if session.UserID == userID {
+			removed++
+			continue
+		}
+		kept = append(kept, session)
+	}
+	f.list = kept
+	return removed, nil
 }
 
 func (f *fakeSessions) ListActive(_ context.Context, userID int64, at time.Time) ([]*domain.Session, error) {
@@ -976,6 +1053,19 @@ func (f *fakeDevices) Delete(_ context.Context, userID int64, deviceID string) (
 	}
 	delete(f.items, key)
 	return true, nil
+}
+
+func (f *fakeDevices) DeleteByUser(_ context.Context, userID int64) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var removed int64
+	for key, device := range f.items {
+		if device.UserID == userID {
+			delete(f.items, key)
+			removed++
+		}
+	}
+	return removed, nil
 }
 
 func (f *fakeDevices) count() int {

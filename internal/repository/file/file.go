@@ -49,6 +49,7 @@ func (r *Repo) GetByID(ctx context.Context, id int64) (*domain.File, error) {
 }
 
 // MarkReady 把 pending 记录置为 ready，并回填对象实际大小与 MIME。
+// 分片上传完成后清空 upload_id：此后记录只对应一个已完成对象，回收时不再需要 abort。
 func (r *Repo) MarkReady(ctx context.Context, id, userID, size int64, mime string, at time.Time) (bool, error) {
 	result := repository.DBFromContext(ctx, r.db).
 		Model(&model.FileObject{}).
@@ -56,6 +57,7 @@ func (r *Repo) MarkReady(ctx context.Context, id, userID, size int64, mime strin
 		Updates(map[string]any{
 			"size":       size,
 			"mime":       mime,
+			"upload_id":  "",
 			"status":     model.FileStatusReady,
 			"updated_at": at,
 		})
@@ -113,38 +115,91 @@ func (r *Repo) MarkDeletedIfPending(ctx context.Context, id, userID int64, at ti
 	return result.RowsAffected > 0, nil
 }
 
+// ListDeletedObjects 返回已删除但对象尚未确认回收的记录。
+func (r *Repo) ListDeletedObjects(ctx context.Context, limit int) ([]*domain.File, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	var recs []model.FileObject
+	err := repository.DBFromContext(ctx, r.db).
+		Where("status = ? AND object_deleted_at IS NULL", model.FileStatusDeleted).
+		Order("updated_at ASC, id ASC").
+		Limit(limit).
+		Find(&recs).Error
+	if err != nil {
+		return nil, err
+	}
+	files := make([]*domain.File, 0, len(recs))
+	for idx := range recs {
+		files = append(files, fromRecord(&recs[idx]))
+	}
+	return files, nil
+}
+
+// MarkObjectDeleted 记录对象已确认回收；条件更新保证重复执行幂等。
+func (r *Repo) MarkObjectDeleted(ctx context.Context, id int64, at time.Time) (bool, error) {
+	result := repository.DBFromContext(ctx, r.db).
+		Model(&model.FileObject{}).
+		Where("id = ? AND status = ? AND object_deleted_at IS NULL", id, model.FileStatusDeleted).
+		Updates(map[string]any{
+			"object_deleted_at": at,
+			"updated_at":        at,
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// MarkDeletedByUser 把用户全部未删除记录置为 deleted，返回受影响条数。
+func (r *Repo) MarkDeletedByUser(ctx context.Context, userID int64, at time.Time) (int64, error) {
+	result := repository.DBFromContext(ctx, r.db).
+		Model(&model.FileObject{}).
+		Where("user_id = ? AND status <> ?", userID, model.FileStatusDeleted).
+		Updates(map[string]any{
+			"status":     model.FileStatusDeleted,
+			"updated_at": at,
+		})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
+}
+
 func toRecord(f *domain.File) *model.FileObject {
 	return &model.FileObject{
-		ID:        f.ID,
-		UserID:    f.UserID,
-		Purpose:   f.Purpose,
-		ObjectKey: f.ObjectKey,
-		FileName:  f.FileName,
-		MIME:      f.MIME,
-		Size:      f.Size,
-		SHA256:    f.SHA256,
-		UploadID:  f.UploadID,
-		Status:    f.Status,
-		ExpiresAt: f.ExpiresAt,
-		CreatedAt: f.CreatedAt,
-		UpdatedAt: f.UpdatedAt,
+		ID:              f.ID,
+		UserID:          f.UserID,
+		Purpose:         f.Purpose,
+		ObjectKey:       f.ObjectKey,
+		FileName:        f.FileName,
+		MIME:            f.MIME,
+		Size:            f.Size,
+		SHA256:          f.SHA256,
+		UploadID:        f.UploadID,
+		Status:          f.Status,
+		ExpiresAt:       f.ExpiresAt,
+		ObjectDeletedAt: f.ObjectDeletedAt,
+		CreatedAt:       f.CreatedAt,
+		UpdatedAt:       f.UpdatedAt,
 	}
 }
 
 func fromRecord(rec *model.FileObject) *domain.File {
 	return &domain.File{
-		ID:        rec.ID,
-		UserID:    rec.UserID,
-		Purpose:   rec.Purpose,
-		ObjectKey: rec.ObjectKey,
-		FileName:  rec.FileName,
-		MIME:      rec.MIME,
-		Size:      rec.Size,
-		SHA256:    rec.SHA256,
-		UploadID:  rec.UploadID,
-		Status:    rec.Status,
-		ExpiresAt: rec.ExpiresAt,
-		CreatedAt: rec.CreatedAt,
-		UpdatedAt: rec.UpdatedAt,
+		ID:              rec.ID,
+		UserID:          rec.UserID,
+		Purpose:         rec.Purpose,
+		ObjectKey:       rec.ObjectKey,
+		FileName:        rec.FileName,
+		MIME:            rec.MIME,
+		Size:            rec.Size,
+		SHA256:          rec.SHA256,
+		UploadID:        rec.UploadID,
+		Status:          rec.Status,
+		ExpiresAt:       rec.ExpiresAt,
+		ObjectDeletedAt: rec.ObjectDeletedAt,
+		CreatedAt:       rec.CreatedAt,
+		UpdatedAt:       rec.UpdatedAt,
 	}
 }

@@ -164,6 +164,7 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 			LoginLockWindow:        cfg.Auth.LoginLockWindow,
 			IMAPIBaseURL:           imAPIBaseURL,
 			IMWSURL:                cfg.IM.WSURL,
+			DeletionCooldown:       cfg.Account.DeletionCooldown,
 			AvatarURL:              avatarURL,
 		},
 		log.Sugar(),

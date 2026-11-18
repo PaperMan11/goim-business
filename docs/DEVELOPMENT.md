@@ -53,7 +53,7 @@
 | 用户资料（最小） | 昵称、头像 fileId、bio；MySQL 为事实源，goim 为投影 | 聊天界面必须显示昵称/头像 | ✅ 已实现（头像上传 `/files` 与公开 `avatarUrl` 已就绪） |
 | 设备注册 | deviceID、平台、版本、最后活跃；支撑多端会话与踢出 | 多端登录是 Web + 桌面的现实场景 | ✅ 已实现（`account_devices`，移除设备即踢出该设备会话） |
 | 客户端配置 | IM 地址、平台映射、上传限制、功能开关；版本 + ETag | 客户端换环境/开关不能靠重新发版 | ✅ 已实现（`client_configs` + ETag/304；配置表缺失回退内置默认值） |
-| 文件（头像 + 附件） | 复用 RustFS：单文件 PUT + 分片上传 + 现签 GET；公开资源统一 `public/` 命名空间 | 头像走单文件并直接使用公开 URL；业务附件走分片；聊天附件仍走 goim `/third/*` | ✅ 已实现（孤儿清理 ⏳） |
+| 文件（头像 + 附件） | 复用 RustFS：单文件 PUT + 分片上传 + 现签 GET；公开资源统一 `public/` 命名空间 | 头像走单文件并直接使用公开 URL；业务附件走分片；聊天附件仍走 goim `/third/*` | ✅ 已实现（孤儿与删除态对象回收 ✅） |
 | 可观测与交付 | 日志、request_id、Prometheus、健康检查、迁移、单测、compose、CI、镜像、优雅启停 | 上线门槛，不属于业务功能但不能省 | ✅ 已实现（详见 §4.11~§4.13） |
 
 ### 1.4 只定义契约、首版不实现
@@ -118,13 +118,13 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 
 ### 2.3 业务后端必须补充的“现状未覆盖职责”
 
-1. **IM 账号开通器（User Provisioning）**（✅）：注册后同步 goim user，失败可重试，状态可查询。**业务 userID 即 IM userID**，开通时原样写入，不生成第二套 ID。当前已写入 `account_users.im_status/im_synced_at`；注册事务内同时写通用 `outbox_events`，独立 `cmd/cron` 进程按退避策略补偿（✅）；注销同步仍 ⏳。
+1. **IM 账号开通器（User Provisioning）**（✅）：注册后同步 goim user，失败可重试，状态可查询。**业务 userID 即 IM userID**，开通时原样写入，不生成第二套 ID。当前已写入 `account_users.im_status/im_synced_at`；注册事务内同时写通用 `outbox_events`，独立 `cmd/cron` 进程按退避策略补偿（✅）；注销同步（`purge_im_user`，placeholder 模式）✅。
 2. **IM Token Broker**（✅）：admin token 缓存、按 `(userID, platformID)` 复用 user token、IP 限频。
 3. **设备注册表**（⏳）：deviceID、平台、版本、推送 token、最后活跃时间；支撑多端踢出与推送。当前会话表已记录 `device_id`，但没有独立设备表。
 4. **业务文件资产**（⏳）：首版只做头像；后续扩展反馈截图、后台素材的对象 key、配额、审计；与聊天附件分桶/分前缀。
 5. **配置中心**（⏳）：客户端配置、功能开关、IM 地址与平台映射，版本化下发。
 6. **审计日志**（⏳）：管理端写操作留痕（谁、何时、对谁、做了什么、request_id）；B 档转正时启用。
-7. **账号生命周期**（⏳）：注销、冻结、解冻、数据导出（合规模块可后置，但表结构首版预留）。当前只有状态常量与冻结登录检查，无注销接口。
+7. **账号生命周期**（✅ 注销 / ⏳ 冻结解冻与导出）：`DELETE /account` 注销后立即下线并同步 IM，冷却期（默认 15 天）结束后由 `account_purge` 任务物理清除资料、凭证、会话与设备，并把文件置为删除交由清理任务回收；冻结登录检查已实现，解冻与数据导出仍 ⏳。
 
 ### 2.4 业务域全景与实现状态
 
@@ -134,7 +134,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 
 | 业务域 | 分档 | 当前状态 | 首版行为 | 扩展点 |
 |---|---|---|---|---|
-| 账号 / 会话 / 令牌 | A | ✅ 已实现 | 注册、登录、刷新、登出、会话列表、踢会话、改密 | OAuth、短信、2FA、注销 |
+| 账号 / 会话 / 令牌 | A | ✅ 已实现 | 注册、登录、刷新、登出、会话列表、踢会话、改密、注销（冷却期 + 异步清除） | OAuth、短信、2FA、解冻与数据导出 |
 | IM 凭证 | A | ✅ 已实现 | admin token 缓存 + user token 兑换（Redis 缓存/限流）+ 状态查询与手动重试 | 多租户 issuer、按 App 的 secret |
 | 用户资料 | A（最小） | ✅ 已实现 | 昵称/头像 key/bio；批量公开资料（`/profile` 路由已注册） | 扩展字段、敏感词、资料审核 |
 | 设备 | A（最小） | ⏳ 规划中 | 注册、列表、移除（尚未注册路由） | 推送 token、设备风控 |
@@ -398,7 +398,7 @@ refresh 规则（✅ 已实现）：
 - **每次刷新都轮换**：同一事务内 `MarkRotated` 原子更新旧行 `rotated_at`，再插入新行并继承 `family_id`，`rotated_from=旧 sid`。
 - **重放检测**：收到已轮换的旧 token（`rotated_at` 非空）或并发刷新中 `MarkRotated` 返回 false，立即 `RevokeFamily` 撤销该 `family_id` 下全部未撤销会话，并清理 Redis 活跃标记，返回 `2005`。
 - 会话维度：`(user_id, device_id, platform)` 仅作为记录，不设唯一约束；策略 `max_sessions_per_user=5`、`max_sessions_per_platform=3`，超限按 `created_at` 从旧到新踢出（当前会话除外）。
-- 登出 = 标记当前 session `revoked_at` + 删除 Redis 活跃标记；改密 = 更新哈希 + 撤销当前会话之外的全部会话并清标记。注销（撤销全部会话）未提供接口（⏳）。
+- 登出 = 标记当前 session `revoked_at` + 删除 Redis 活跃标记；改密 = 更新哈希 + 撤销当前会话之外的全部会话并清标记。注销 = 撤销全部会话 + 清标记 + 进入注销中（冷却期后由 cron 物理清除）。
 - `last_seen_at` 字段已建表但当前代码不更新（无活跃上报接口，⏳）。
 
 **Cookie 方案**：原蓝图设想 Web 用 HttpOnly + Secure + SameSite=Lax Cookie；当前实现统一通过 JSON 响应体下发 `refreshToken`、请求体回传，Cookie 下发/读取未实现（⏳）。`X-Client-Platform` 只影响新会话的平台记录，不区分 refresh 的传递方式。
@@ -1054,7 +1054,7 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 | GET | `/account/sessions` | 🔐 | 当前用户活跃会话列表 | ✅ |
 | POST | `/account/sessions/revoke` | 🔐 | 按 body `sessionId` 踢指定会话 | ✅ |
 | PUT | `/account/password` | 🔐 | 改密，撤销其他会话 | ✅ |
-| DELETE | `/account` | 🔐 | 注销（冷却期 + 异步清理） | ⏳ 未注册路由 |
+| DELETE | `/account` | 🔐 | 注销（冷却期 + 异步清理） | ✅ 已注册 |
 
 `POST /account/login` 实际请求/响应（`types.LoginRequest` / `types.AuthResp`）：
 
@@ -1129,7 +1129,7 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 }
 ```
 
-### 8.6 文件 `/files`（✅ 已注册，孤儿清理 ⏳）
+### 8.6 文件 `/files`（✅ 已注册，过期 pending 与删除态对象回收 ✅）
 
 `file_objects` 表（migration `000005`）、S3 适配层（`internal/pkg/storage/s3`）与文件服务（`internal/service/file`）已就绪。
 
@@ -1335,7 +1335,7 @@ POST /admin/announcements
 | 密码 | argon2id（m=64MB, t=3, p=4），禁止可逆存储 | ✅ |
 | 越权 | 用户态接口按 `userID` 过滤；管理端独立 audience + 角色校验 | ✅ 账号接口按 userID 校验；管理端 ⏳ |
 | 审计 | 管理端写操作 100% 落审计；保留 180 天 | ⏳ |
-| 合规 | 注销冷却期 15 天；删除后对象与资料异步清理 | ⏳ |
+| 合规 | 注销冷却期 15 天；删除后对象与资料异步清理 | ✅（placeholder 模式） |
 
 ---
 
@@ -1400,6 +1400,111 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 转正方式：补 service/repository 与 handler 实现，再补对应 OpenAPI operation；路径与 DTO 不变。
 
 依赖关系：M0 → M1 → M2 为硬串行；M3/M4 可并行；M5 与 M4 收尾并行；M6 在首版发布后按实际需求安排，不预设优先级。
+
+### M6.1 注销同步 IM 与删除态对象回收（✅ 已实现，IM 采用 placeholder 模式）
+
+#### 目标与边界
+
+- 提供注销入口：立即下线并同步 IM，本地敏感数据在冷却期结束后物理清除。
+- 冷却期默认 15 天（可配），期内账号不可登录、不可调用业务接口，保留数据用于审计与人工恢复。
+- 删除态对象（用户主动删除、账号注销、过期未完成）统一由后台任务回收，保证「元数据已删但对象残留」可重试且不重复误删。
+- 不引入第二套 ID：业务 `userID` 即 IM `userID`；不猜测 goim 未公开的接口语义。
+
+#### 数据模型（已并入基线迁移 `000001_account_init` / `000005_file_objects`）
+
+| 表 | 变更 | 说明 |
+| --- | --- | --- |
+| `account_users` | 新增 `purge_at DATETIME(3) NULL` | 注销中账号的物理清除时间（UTC）；正常账号为 NULL |
+| `account_users` | 新增 `KEY idx_status_purge (status, purge_at)` | 支撑 cron 扫描待清除账号 |
+| `file_objects` | 新增 `object_deleted_at DATETIME(3) NULL` | 对象已回收时间；NULL 表示 `status=2` 但对象尚未确认删除 |
+| `file_objects` | 新增 `KEY idx_status_object_deleted (status, object_deleted_at)` | 支撑回收任务扫描 |
+| `account_users.im_status` | 语义扩展 `3=已注销`（列类型不变） | 仅改注释与领域常量，不新增列 |
+
+`status` 语义保持不变：`0 pending`、`1 ready`、`2 deleted`（元数据已删）。对象是否真正删除由 `object_deleted_at` 表达，避免用状态位混合表达两件事。
+
+#### 注销链路
+
+1. `DELETE /api/v1/account`（Bearer 鉴权）：
+   - 事务内 `MarkDeleting(userID, purgeAt)`：`WHERE status=1` 置 `3` 并写 `purge_at = now + deletion_cooldown`；条件更新失败返回冲突，重复注销幂等。同一事务 `Enqueue(userID, "purge_im_user", "{}")`。
+   - 提交后：`RevokeAll(userID, now, 0)` 逐个 `Deactivate(sid)`，删除 IM token 缓存（按平台 1~5 直接 DEL，不使用 SCAN），返回 `{ "purgeAt": "..." }`。
+   - 尽力即时同步：`imSync.Purge(ctx, user)`，成功/失败交由 `Settle` 落定 outbox；失败不影响接口成功。
+2. 冷却期内：`CanAuthenticate` 已对 `3/4` 拒绝；公开资料查询按 `status IN (3,4)` 过滤，避免已注销账号继续被他人看到。
+3. cron 任务 `account_purge`（默认 1h、单批 50）：
+   - `ListDueForPurge(now, limit)`：`status=3 AND purge_at <= now`。
+   - 每条在事务内 `MarkPurged`：`WHERE status=3` 置 `4`，同时清空 `nickname/avatar_key/bio`，`login_name` 改为 `deleted_<id>` 释放原名（保留唯一性与审计）。
+   - 事务内删除 `account_credentials`、`account_devices` 与该用户 `account_sessions`；对 `file_objects` 执行 `MarkDeletedByUser`（`status<>2` → `2`），对象交给文件回收任务。
+   - 单条失败只记日志并继续，下一轮重试；`MarkPurged` 的条件更新保证多实例下只执行一次。
+
+#### IM 同步语义
+
+- 新增 outbox action `purge_im_user`，由 `internal/job/im` 的 worker 处理：
+  - IM 未启用或 `im_status` 不是 `1(Ready)`：直接 `MarkDone`（IM 侧本来没有投影或已完成注销，避免无意义重试）。
+  - 当前固定使用 **placeholder 模式**：调用 `UpdateUserInfo` 写入占位资料（昵称「已注销用户」、`faceURL` 空），成功后把 `im_status` 置 `3` 并 `MarkDone`。该方式只依赖现有 `update_user_info` 接口，幂等可重放。
+  - 真删（goim 提供删除接口后）再评估新增 `delete` 模式；当前不引入 `im.purge_mode` 配置，避免为未就绪接口预埋开关。
+  - 失败走既有指数退避，`last_error` 落 `outbox_events`，可在 `/im/status` 与日志中观测。
+- IM token 缓存在注销请求时即清除，冷却期内无法再换取新 token。
+
+#### 删除态对象回收
+
+回收任务沿用 `file_object_cleanup`，改为两阶段：
+
+1. 过期 pending：`ListExpiredPending` → `MarkDeletedIfPending`（与 complete 竞争的原子保护保持不变）→ 有 `upload_id` 走 `AbortMultipartUpload`，否则 `DeleteObject`。
+2. 已删待回收：`ListDeletedObjects`（`status=2 AND object_deleted_at IS NULL`）→ `DeleteObject`（分片残留先 abort）。
+3. 对象回收成功（含 `IsNotFound`）后 `MarkObjectDeleted(id, now)`（条件为 `status=2 AND object_deleted_at IS NULL`）；失败保留 NULL，下一轮重试并计入 `failed` 指标。
+4. 用户主动删除：`Service.Delete` 软删成功后同步删除对象，成功即写 `object_deleted_at`；失败交给任务重试（现有行为不变，只是补上成功标记）。
+
+配套仓储端口（`internal/domain/file/repository.go` 与 `internal/repository/file/file.go`）：
+
+- `ListDeletedObjects(ctx, limit)`
+- `MarkObjectDeleted(ctx, id, at)`
+- `MarkDeletedByUser(ctx, userID, at) (int64, error)`
+
+#### 幂等与并发
+
+- `MarkDeleting` / `MarkPurged` / `MarkObjectDeleted` 全部使用条件更新，返回值决定是否继续，天然支持多实例与重复调用。
+- 注销与 complete 竞争：`MarkReady` 仅接受 `status=0`，注销流程不触碰 pending 记录的 `ready` 转换；对象删除幂等，S3 删除不存在的 key 视为成功。
+- outbox 每个用户每类动作只有一条未完成任务（现有 `FindPending` 语义），注销事务内的条件更新保证不会重复入队。
+
+#### 配置
+
+```yaml
+account:
+  deletion_cooldown: 360h   # 注销冷却期，默认 15 天
+  purge_interval: 1h        # 待清除账号扫描间隔
+  purge_batch_size: 50      # 单批处理数
+```
+
+启动校验：`deletion_cooldown > 0`、`purge_interval > 0`、`purge_batch_size > 0`。IM 注销固定走 placeholder，不新增配置项。
+
+#### 涉及改动清单
+
+| 层 | 文件 |
+| --- | --- |
+| 迁移 | `migrations/000001_account_init.up.sql`（`purge_at` 与索引）、`migrations/000005_file_objects.up.sql`（`object_deleted_at` 与索引） |
+| 领域 | `internal/domain/account/{user,repository}.go`（`PurgeAt`、`MarkDeleting`、`ListDueForPurge`、`MarkPurged`）；`internal/domain/file/{file,repository}.go`（`ObjectDeletedAt` 与新方法） |
+| 仓储 | `internal/repository/account/{user,credential,session,device}.go`；`internal/repository/file/file.go` |
+| 服务 | `internal/service/account/deletion.go`；`internal/service/file/service.go`（删除后写标记） |
+| 任务 | `internal/job/account/purge.go`、`internal/job/im/worker.go`（`Purge` 与 `purge_im_user` 分支）、`internal/job/file/cleanup.go`（第二阶段） |
+| 接入 | `internal/handler/account`、`internal/handler/routes.go`、`internal/app/{app,cron}.go`、`internal/types/account.go`（`DeleteAccountResp`） |
+| 客户端 | `internal/service/ports/im.go`（`IMTokenCache.Delete`）；placeholder 复用既有 `UpdateUserInfo`，未新增 goim 删除接口 |
+| 文档/契约 | `api/openapi.yaml`、`api/apifox.json`、`etc/{base,dev,prod}.yaml`、`docs/FRONTEND_INTEGRATION.md` |
+
+#### 测试与验收
+
+- 单测：注销置 `3` 与 `purge_at`、重复注销幂等、会话全部撤销且 Redis 标记清除、注销后登录返回账号不可用、公开资料不可见。
+- 任务：到期账号置 `4`、凭证/会话/设备删除、`login_name` 改名、文件批量置 `2`、outbox 只入队一次；重复执行无副作用。
+- IM：`purge_im_user` 成功置 `im_status=3`；失败按退避重试；IM 未启用/未 Ready 直接完成（未 Ready 表示 IM 侧没有投影）。
+- 文件回收：deleted 且对象未删 → 删除对象并写 `object_deleted_at`；删除失败保留 NULL 并重试；`complete` 竞态不误删；`IsNotFound` 视为成功。
+- 验收：注销 → 15 天（可用测试配置缩短）→ 账号数据与对象全部清除；`SELECT ... status=2 AND object_deleted_at IS NULL` 长期为 0。
+
+#### 实施顺序
+
+1. 迁移与领域/仓储（含条件更新单测）
+2. 文件回收第二阶段 + `Service.Delete` 标记
+3. 注销接口与会话/缓存清理
+4. `account_purge` cron 与文件批量置删
+5. `purge_im_user` outbox 与 placeholder 模式
+6. OpenAPI/前端文档、联调清单补充
 
 ---
 

@@ -2,6 +2,7 @@
 -- 表归属：文件域（file），服务端持有 object_key，客户端只拿 file_id。
 -- 生命周期：申请上传时写入 pending（带 expires_at）→ complete 校验通过后置 ready → 删除置 deleted。
 -- 对象本体存放在 RustFS/S3 bucket 中，本表只保存元数据与归属，不存文件内容。
+-- 对象回收：status=deleted 只代表元数据已删；object_deleted_at 为空表示对象尚未确认回收，由清理任务重试。
 
 CREATE TABLE file_objects (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '文件 ID；对外以字符串下发',
@@ -15,9 +16,11 @@ CREATE TABLE file_objects (
   upload_id   VARCHAR(128) NOT NULL DEFAULT '' COMMENT 'S3 分片上传 ID；单文件 PUT 上传为空，complete/abort 时按此 ID 操作',
   status      TINYINT      NOT NULL DEFAULT 0 COMMENT '状态：0待上传 1可用 2已删除',
   expires_at  DATETIME(3)  NULL COMMENT 'pending 超时时间；过期仍未 complete 时由清理任务删除对象与记录',
+  object_deleted_at DATETIME(3) NULL COMMENT '对象回收完成时间（UTC）；NULL 表示 status=2 但对象尚未确认删除',
   created_at  DATETIME(3)  NOT NULL COMMENT '创建时间（UTC）',
   updated_at  DATETIME(3)  NOT NULL COMMENT '更新时间（UTC）',
   UNIQUE KEY uk_object_key (object_key) COMMENT '对象路径唯一，防止覆盖他人文件',
   KEY idx_user_status (user_id, status, created_at) COMMENT '按用户与状态查询文件列表、统计配额',
-  KEY idx_status_expires (status, expires_at) COMMENT '扫描超时 pending 记录，支撑清理任务'
+  KEY idx_status_expires (status, expires_at) COMMENT '扫描超时 pending 记录，支撑清理任务',
+  KEY idx_status_object_deleted (status, object_deleted_at) COMMENT '扫描已删除但对象未回收的记录'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文件对象元数据表';

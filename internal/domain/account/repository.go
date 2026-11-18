@@ -14,6 +14,12 @@ type UserRepository interface {
 	TouchLastLogin(ctx context.Context, id int64, at time.Time) error
 	UpdateIMStatus(ctx context.Context, userID int64, status int8, syncedAt *time.Time, at time.Time) error
 	UpdateProfile(ctx context.Context, userID int64, nickname, avatarKey, bio string, at time.Time) error
+	// MarkDeleting 把正常账号置为注销中并写入物理清除时间；返回是否更新成功。
+	MarkDeleting(ctx context.Context, userID int64, purgeAt, at time.Time) (bool, error)
+	// ListDueForPurge 返回注销中且已到清除时间的账号，按 purge_at 升序，最多 limit 条。
+	ListDueForPurge(ctx context.Context, now time.Time, limit int) ([]*User, error)
+	// MarkPurged 把注销中账号置为已注销并清除资料；loginName 用于释放原登录名。
+	MarkPurged(ctx context.Context, userID int64, loginName string, at time.Time) (bool, error)
 }
 
 // CredentialRepository 是密码凭证仓储端口。
@@ -21,6 +27,8 @@ type CredentialRepository interface {
 	Create(ctx context.Context, cred *Credential) error
 	GetByUserID(ctx context.Context, userID int64) (*Credential, error)
 	UpdatePasswordHash(ctx context.Context, userID int64, hash string, at time.Time) error
+	// DeleteByUser 删除用户密码凭证；不存在时视为成功。
+	DeleteByUser(ctx context.Context, userID int64) error
 }
 
 // SessionRepository 是会话仓储端口。
@@ -35,6 +43,8 @@ type SessionRepository interface {
 	// RevokeByDevice 撤销用户指定设备的全部活跃会话，返回被撤销的 sid。
 	RevokeByDevice(ctx context.Context, userID int64, deviceID string, at time.Time) ([]int64, error)
 	ListActive(ctx context.Context, userID int64, at time.Time) ([]*Session, error)
+	// DeleteByUser 物理删除用户全部会话，返回删除条数。
+	DeleteByUser(ctx context.Context, userID int64) (int64, error)
 }
 
 // DeviceRepository 是设备登记表仓储端口。
@@ -44,4 +54,6 @@ type DeviceRepository interface {
 	ListByUser(ctx context.Context, userID int64) ([]*Device, error)
 	// Delete 删除设备记录；返回记录是否存在。
 	Delete(ctx context.Context, userID int64, deviceID string) (bool, error)
+	// DeleteByUser 物理删除用户全部设备记录，返回删除条数。
+	DeleteByUser(ctx context.Context, userID int64) (int64, error)
 }

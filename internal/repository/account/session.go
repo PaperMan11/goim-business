@@ -178,6 +178,17 @@ func (r *SessionRepo) RevokeByDevice(ctx context.Context, userID int64, deviceID
 	return sids, nil
 }
 
+// DeleteByUser 物理删除用户全部会话，返回删除条数。
+func (r *SessionRepo) DeleteByUser(ctx context.Context, userID int64) (int64, error) {
+	result := r.dbFrom(ctx).
+		Where("user_id = ?", userID).
+		Delete(&model.Session{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
+}
+
 // ListActive 列出用户当前活跃会话（未撤销、未轮换、未过期），按创建时间升序（最旧在前）。
 func (r *SessionRepo) ListActive(ctx context.Context, userID int64, at time.Time) ([]*domain.Session, error) {
 	var records []*model.Session

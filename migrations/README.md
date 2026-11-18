@@ -47,7 +47,7 @@ Get-ChildItem migrations\*_common_*           # 通用表
 | 000002 | `000002_common_outbox_events` | common | `outbox_events` 通用任务表 |
 | 000003 | `000003_account_devices` | account | `account_devices` 设备登记表 |
 | 000004 | `000004_account_client_configs` | account | `client_configs` 客户端配置表 |
-| 000005 | `000005_file_objects` | file | `file_objects` 文件对象元数据表 |
+| 000005 | `000005_file_objects` | file | `file_objects` 文件对象元数据表（含 `object_deleted_at` 与回收索引） |
 
 新增迁移后请同步更新本表。未发布阶段允许直接修正已有迁移（如调整列类型）；一旦环境已执行过某版本，只允许新增版本，禁止修改历史脚本。
 

@@ -27,8 +27,9 @@ func TestOpenAPIAccountContract(t *testing.T) {
 	require.Equal(t, "/api/v1", mustMap(t, servers[0])["url"])
 
 	paths := mustMap(t, spec["paths"])
-	require.Len(t, paths, 25, "只允许描述 25 条路径：账号 7、IM 3、资料 3、设备 2、配置 2、文件 8")
+	require.Len(t, paths, 26, "只允许描述 26 条路径：账号 8、IM 3、资料 3、设备 2、配置 2、文件 8")
 	for _, path := range []string{
+		"/account",
 		"/account/register",
 		"/account/login",
 		"/account/refresh",
@@ -67,6 +68,7 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		"RefreshRequest",
 		"RevokeSessionRequest",
 		"ChangePasswordRequest",
+		"DeleteAccountResponse",
 		"AuthResponse",
 		"UserView",
 		"TokenView",
@@ -111,6 +113,7 @@ func TestOpenAPIAccountContract(t *testing.T) {
 		{"/account/sessions", "get"},
 		{"/account/sessions/revoke", "post"},
 		{"/account/password", "put"},
+		{"/account", "delete"},
 		{"/im/token", "post"},
 		{"/im/status", "get"},
 		{"/im/retry", "post"},

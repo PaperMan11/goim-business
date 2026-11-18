@@ -22,8 +22,10 @@ type FileObject struct {
 	UploadID  string     `gorm:"column:upload_id;size:128"`
 	Status    int8       `gorm:"column:status"`
 	ExpiresAt *time.Time `gorm:"column:expires_at"`
-	CreatedAt time.Time  `gorm:"column:created_at"`
-	UpdatedAt time.Time  `gorm:"column:updated_at"`
+	// ObjectDeletedAt 是对象回收完成时间；nil 表示 status=2 但对象尚未确认删除。
+	ObjectDeletedAt *time.Time `gorm:"column:object_deleted_at"`
+	CreatedAt       time.Time  `gorm:"column:created_at"`
+	UpdatedAt       time.Time  `gorm:"column:updated_at"`
 }
 
 func (FileObject) TableName() string { return "file_objects" }

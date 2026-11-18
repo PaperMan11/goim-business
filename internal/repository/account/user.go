@@ -37,6 +37,7 @@ func userRecord(user *domain.User) *model.User {
 		Status:      user.Status,
 		IMStatus:    user.IMStatus,
 		IMSyncedAt:  user.IMSyncedAt,
+		PurgeAt:     user.PurgeAt,
 		LastLoginAt: user.LastLoginAt,
 		CreatedAt:   user.CreatedAt,
 		UpdatedAt:   user.UpdatedAt,
@@ -53,6 +54,7 @@ func userFromRecord(record *model.User) *domain.User {
 		Status:      record.Status,
 		IMStatus:    record.IMStatus,
 		IMSyncedAt:  record.IMSyncedAt,
+		PurgeAt:     record.PurgeAt,
 		LastLoginAt: record.LastLoginAt,
 		CreatedAt:   record.CreatedAt,
 		UpdatedAt:   record.UpdatedAt,
@@ -149,4 +151,58 @@ func (r *UserRepo) UpdateProfile(ctx context.Context, userID int64, nickname, av
 	return mapErr(r.dbFrom(ctx).Model(&model.User{}).
 		Where("id = ?", userID).
 		Updates(updates).Error)
+}
+
+// MarkDeleting 把正常账号置为注销中并写入物理清除时间；条件更新保证重复注销幂等。
+func (r *UserRepo) MarkDeleting(ctx context.Context, userID int64, purgeAt, at time.Time) (bool, error) {
+	result := r.dbFrom(ctx).Model(&model.User{}).
+		Where("id = ? AND status = ?", userID, model.UserStatusNormal).
+		Updates(map[string]any{
+			"status":     model.UserStatusDeleting,
+			"purge_at":   purgeAt,
+			"updated_at": at,
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// ListDueForPurge 返回注销中且已到清除时间的账号。
+func (r *UserRepo) ListDueForPurge(ctx context.Context, now time.Time, limit int) ([]*domain.User, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	var records []model.User
+	err := r.dbFrom(ctx).
+		Where("status = ? AND purge_at IS NOT NULL AND purge_at <= ?", model.UserStatusDeleting, now).
+		Order("purge_at ASC, id ASC").
+		Limit(limit).
+		Find(&records).Error
+	if err != nil {
+		return nil, err
+	}
+	users := make([]*domain.User, 0, len(records))
+	for i := range records {
+		users = append(users, userFromRecord(&records[i]))
+	}
+	return users, nil
+}
+
+// MarkPurged 把注销中账号置为已注销，清空资料并释放原登录名。
+func (r *UserRepo) MarkPurged(ctx context.Context, userID int64, loginName string, at time.Time) (bool, error) {
+	result := r.dbFrom(ctx).Model(&model.User{}).
+		Where("id = ? AND status = ?", userID, model.UserStatusDeleting).
+		Updates(map[string]any{
+			"status":     model.UserStatusDeleted,
+			"login_name": loginName,
+			"nickname":   "",
+			"avatar_key": "",
+			"bio":        "",
+			"updated_at": at,
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }

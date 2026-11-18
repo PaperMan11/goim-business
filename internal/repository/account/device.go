@@ -94,3 +94,14 @@ func (r *DeviceRepo) Delete(ctx context.Context, userID int64, deviceID string) 
 	}
 	return res.RowsAffected > 0, nil
 }
+
+// DeleteByUser 物理删除用户全部设备记录，返回删除条数。
+func (r *DeviceRepo) DeleteByUser(ctx context.Context, userID int64) (int64, error) {
+	result := r.dbFrom(ctx).
+		Where("user_id = ?", userID).
+		Delete(&model.Device{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
+}

@@ -22,6 +22,8 @@ type Config struct {
 	LoginLockWindow        time.Duration
 	IMAPIBaseURL           string
 	IMWSURL                string
+	// DeletionCooldown 是账号注销后到物理清除之间的冷却期。
+	DeletionCooldown time.Duration
 	// AvatarURL 把头像对象 key 解析为公开访问 URL；为空时仅接受已是 http(s) 的地址。
 	AvatarURL func(objectKey string) string
 }
@@ -30,6 +32,8 @@ type Config struct {
 type IMProvisioner interface {
 	Provision(ctx context.Context, user *domain.User) error
 	SyncProfile(ctx context.Context, user *domain.User) error
+	// Purge 把 IM 侧资料置为注销占位；IM 未创建投影时由 outbox 直接完成。
+	Purge(ctx context.Context, user *domain.User) error
 	Settle(ctx context.Context, userID int64, action string, cause error)
 }
 
@@ -70,6 +74,10 @@ func NewService(
 	cfg Config,
 	log logger.Logger,
 ) *Service {
+	// 兜底默认冷却期 15 天；正常由配置校验保证大于 0。
+	if cfg.DeletionCooldown <= 0 {
+		cfg.DeletionCooldown = 15 * 24 * time.Hour
+	}
 	return &Service{
 		users:    users,
 		creds:    creds,

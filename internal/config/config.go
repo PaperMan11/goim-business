@@ -25,6 +25,7 @@ type Config struct {
 	MySQL     MySQLConfig     `mapstructure:"mysql"`
 	Redis     RedisConfig     `mapstructure:"redis"`
 	Auth      AuthConfig      `mapstructure:"auth"`
+	Account   AccountConfig   `mapstructure:"account"`
 	RateLimit RateLimitConfig `mapstructure:"ratelimit"`
 	CORS      CORSConfig      `mapstructure:"cors"`
 	IM        IMConfig        `mapstructure:"im"`
@@ -77,6 +78,16 @@ type AuthConfig struct {
 	MaxSessionsPerPlatform int           `mapstructure:"max_sessions_per_platform"`
 	LoginLockThreshold     int64         `mapstructure:"login_lock_threshold"`
 	LoginLockWindow        time.Duration `mapstructure:"login_lock_window"`
+}
+
+// AccountConfig 是账号生命周期相关配置。
+type AccountConfig struct {
+	// DeletionCooldown 是注销后到物理清除之间的冷却期。
+	DeletionCooldown time.Duration `mapstructure:"deletion_cooldown"`
+	// PurgeInterval 是到期账号清除任务的扫描间隔。
+	PurgeInterval time.Duration `mapstructure:"purge_interval"`
+	// PurgeBatchSize 是单次清除的最大账号数。
+	PurgeBatchSize int `mapstructure:"purge_batch_size"`
 }
 
 type RateLimitConfig struct {
@@ -258,6 +269,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Auth.LoginLockThreshold <= 0 || c.Auth.LoginLockWindow <= 0 {
 		return fmt.Errorf("auth.login_lock_threshold/login_lock_window 必须大于 0")
+	}
+	if c.Account.DeletionCooldown <= 0 {
+		return fmt.Errorf("account.deletion_cooldown 必须大于 0")
+	}
+	if c.Account.PurgeInterval <= 0 {
+		return fmt.Errorf("account.purge_interval 必须大于 0")
+	}
+	if c.Account.PurgeBatchSize <= 0 {
+		return fmt.Errorf("account.purge_batch_size 必须大于 0")
 	}
 	if c.Storage.Enabled() {
 		if err := validateStorage(c.Storage); err != nil {

@@ -41,6 +41,12 @@ auth:
   login_lock_threshold: 10
   login_lock_window: 15m
 
+# 账号生命周期：注销后先下线并同步 IM，冷却期结束后由 cron 物理清除本地敏感数据。
+account:
+  deletion_cooldown: 360h   # 注销冷却期，默认 15 天
+  purge_interval: 1h        # 到期账号扫描间隔
+  purge_batch_size: 50      # 单次处理账号数
+
 ratelimit:
   enabled: true
   login_per_minute: 5

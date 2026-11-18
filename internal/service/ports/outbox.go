@@ -17,6 +17,8 @@ const (
 	OutboxActionProvisionIM = "provision_im"
 	// OutboxActionProfileSync 是用户资料变更后同步到 IM 的任务类型。
 	OutboxActionProfileSync = "profile_sync"
+	// OutboxActionPurgeIM 是账号注销后同步 IM 的任务类型。
+	OutboxActionPurgeIM = "purge_im_user"
 )
 
 // OutboxEntry 是一条待处理的 outbox 任务。

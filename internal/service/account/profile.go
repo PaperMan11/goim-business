@@ -95,6 +95,10 @@ func (s *Service) Profiles(ctx context.Context, ids []int64) ([]types.PublicProf
 	}
 	views := make([]types.PublicProfileView, 0, len(users))
 	for _, user := range users {
+		// 注销中/已注销账号不再对外可见，从批量结果中静默跳过。
+		if user.Status == domain.StatusDeleting || user.Status == domain.StatusDeleted {
+			continue
+		}
 		views = append(views, s.publicProfileView(user))
 	}
 	return views, nil

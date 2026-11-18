@@ -54,3 +54,8 @@ func (c *IMTokenCache) Set(ctx context.Context, userID string, platform int8, to
 	}
 	return c.rdb.Set(ctx, c.key(userID, platform), raw, ttl).Err()
 }
+
+// Delete 清除指定平台的 IM token 缓存。
+func (c *IMTokenCache) Delete(ctx context.Context, userID string, platform int8) error {
+	return c.rdb.Del(ctx, c.key(userID, platform)).Err()
+}

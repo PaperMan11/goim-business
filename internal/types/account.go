@@ -48,6 +48,11 @@ type ChangePasswordRequest struct {
 	NewPassword string `json:"newPassword" binding:"required,min=8,max=64"`
 }
 
+// DeleteAccountResp 是注销申请的响应：purgeAt 为冷却期结束后的物理清除时间。
+type DeleteAccountResp struct {
+	PurgeAt time.Time `json:"purgeAt"`
+}
+
 // SessionView 是对外暴露的会话信息（不含任何令牌）。
 type SessionView struct {
 	SessionID  string     `json:"sessionId"`

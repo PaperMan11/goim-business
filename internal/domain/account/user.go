@@ -12,23 +12,27 @@ const (
 	StatusDeleted  int8 = 4
 )
 
-// IM 账号开通状态。
+// IM 账号状态。
 const (
 	IMStatusPending int8 = 0
 	IMStatusReady   int8 = 1
 	IMStatusFailed  int8 = 2
+	// IMStatusPurged 表示账号已注销，IM 侧资料已被占位处理。
+	IMStatusPurged int8 = 3
 )
 
 // User 是业务账号；ID 是数据库自增主键，对 IM 下发时转为字符串。
 type User struct {
-	ID          int64
-	LoginName   string
-	Nickname    string
-	AvatarKey   string
-	Bio         string
-	Status      int8
-	IMStatus    int8
-	IMSyncedAt  *time.Time
+	ID         int64
+	LoginName  string
+	Nickname   string
+	AvatarKey  string
+	Bio        string
+	Status     int8
+	IMStatus   int8
+	IMSyncedAt *time.Time
+	// PurgeAt 是注销冷却期结束后的物理清除时间；正常账号为 nil。
+	PurgeAt     *time.Time
 	LastLoginAt *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

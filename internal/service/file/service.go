@@ -305,13 +305,15 @@ func (s *Service) MultipartAbort(ctx context.Context, userID int64, rawFileID st
 	if file.Status != domain.StatusPending || file.UploadID == "" {
 		return errcode.ErrConflict.WithMessage("文件已上传完成，无法取消分片上传")
 	}
-	s.abortBestEffort(ctx, file.ObjectKey, file.UploadID)
 	ok, err := s.repo.MarkDeleted(ctx, file.ID, userID, s.now())
 	if err != nil {
 		return s.dbErr("取消分片上传", err)
 	}
 	if !ok {
 		return errcode.ErrConflict.WithMessage("文件状态已变化，请刷新后重试")
+	}
+	if s.abortBestEffort(ctx, file.ObjectKey, file.UploadID) {
+		s.markObjectDeletedBestEffort(ctx, file.ID)
 	}
 	return nil
 }
@@ -350,6 +352,8 @@ func (s *Service) verifyAndMarkReady(ctx context.Context, file *domain.File, use
 	}
 	file.Size = info.Size
 	file.Status = domain.StatusReady
+	// 分片上传已完成；清空本地副本的 upload_id，与仓储保持一致。
+	file.UploadID = ""
 	return fileView(file), nil
 }
 
@@ -402,26 +406,41 @@ func (s *Service) Delete(ctx context.Context, userID int64, rawFileID string) er
 	}
 
 	if s.s3 == nil {
+		// 未配置对象存储时不存在对象，直接记录回收完成，避免清理任务反复扫描。
+		s.markObjectDeletedBestEffort(ctx, file.ID)
 		return nil
 	}
 	if wasPending && file.UploadID != "" {
-		s.abortBestEffort(ctx, file.ObjectKey, file.UploadID)
+		if s.abortBestEffort(ctx, file.ObjectKey, file.UploadID) {
+			s.markObjectDeletedBestEffort(ctx, file.ID)
+		}
 		return nil
 	}
 	if err := s.s3.DeleteObject(ctx, file.ObjectKey); err != nil && !s3.IsNotFound(err) {
 		// 元数据已软删，对象残留由清理任务按 deleted 状态回收。
 		s.log.Warnf("删除对象失败: file_id=%d, key=%s, err=%v", file.ID, file.ObjectKey, err)
+		return nil
 	}
+	s.markObjectDeletedBestEffort(ctx, file.ID)
 	return nil
 }
 
-// abortBestEffort 放弃分片上传；失败只记日志，残留分片由对象存储生命周期规则回收。
-func (s *Service) abortBestEffort(ctx context.Context, objectKey, uploadID string) {
+// abortBestEffort 放弃分片上传；失败只记日志并返回 false，残留对象由清理任务重试。
+func (s *Service) abortBestEffort(ctx context.Context, objectKey, uploadID string) bool {
 	if s.s3 == nil {
-		return
+		return true
 	}
 	if err := s.s3.AbortMultipartUpload(ctx, objectKey, uploadID); err != nil && !s3.IsNotFound(err) {
 		s.log.Warnf("取消分片上传失败: key=%s, upload_id=%s, err=%v", objectKey, uploadID, err)
+		return false
+	}
+	return true
+}
+
+// markObjectDeletedBestEffort 记录对象已确认回收；失败保留 NULL，由清理任务重试。
+func (s *Service) markObjectDeletedBestEffort(ctx context.Context, fileID int64) {
+	if _, err := s.repo.MarkObjectDeleted(ctx, fileID, s.now()); err != nil {
+		s.log.Warnf("记录对象回收完成失败: file_id=%d, err=%v", fileID, err)
 	}
 }
 

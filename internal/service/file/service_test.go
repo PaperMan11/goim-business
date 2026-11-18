@@ -51,6 +51,7 @@ func (r *fakeRepo) MarkReady(_ context.Context, id, userID, size int64, mime str
 	}
 	f.Size = size
 	f.MIME = mime
+	f.UploadID = ""
 	f.Status = domain.StatusReady
 	f.UpdatedAt = at
 	return true, nil
@@ -79,6 +80,45 @@ func (r *fakeRepo) ListExpiredPending(_ context.Context, now time.Time, limit in
 		}
 	}
 	return expired, nil
+}
+
+func (r *fakeRepo) ListDeletedObjects(_ context.Context, limit int) ([]*domain.File, error) {
+	out := make([]*domain.File, 0)
+	for _, f := range r.files {
+		if f.Status != domain.StatusDeleted || f.ObjectDeletedAt != nil {
+			continue
+		}
+		copied := *f
+		out = append(out, &copied)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeRepo) MarkObjectDeleted(_ context.Context, id int64, at time.Time) (bool, error) {
+	f, ok := r.files[id]
+	if !ok || f.Status != domain.StatusDeleted || f.ObjectDeletedAt != nil {
+		return false, nil
+	}
+	value := at
+	f.ObjectDeletedAt = &value
+	f.UpdatedAt = at
+	return true, nil
+}
+
+func (r *fakeRepo) MarkDeletedByUser(_ context.Context, userID int64, at time.Time) (int64, error) {
+	var affected int64
+	for _, f := range r.files {
+		if f.UserID != userID || f.Status == domain.StatusDeleted {
+			continue
+		}
+		f.Status = domain.StatusDeleted
+		f.UpdatedAt = at
+		affected++
+	}
+	return affected, nil
 }
 
 func (r *fakeRepo) MarkDeletedIfPending(_ context.Context, id, userID int64, at time.Time) (bool, error) {
@@ -342,6 +382,7 @@ func TestMultipartPresignAndComplete(t *testing.T) {
 	require.Equal(t, int64(size), view.Size)
 	require.Equal(t, domain.StatusReady, view.Status)
 	require.Equal(t, domain.StatusReady, repo.files[1].Status)
+	require.Empty(t, repo.files[1].UploadID, "分片完成后应清空 upload_id，回收时无需 abort")
 }
 
 func TestMultipartRejectsInvalidParts(t *testing.T) {

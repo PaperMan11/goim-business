@@ -11,6 +11,7 @@ import (
 
 	"goim-business/internal/client/goim"
 	"goim-business/internal/config"
+	accountjob "goim-business/internal/job/account"
 	filejob "goim-business/internal/job/file"
 	imjob "goim-business/internal/job/im"
 	"goim-business/internal/pkg/lock"
@@ -37,10 +38,11 @@ type CronApp struct {
 	// Storage 为 nil 表示对象存储未配置，文件清理只回收元数据。
 	Storage s3.S3Client
 
-	IM          *goim.Client
-	Worker      *imjob.Worker
-	FileCleaner *filejob.Cleaner
-	Locker      lock.Locker
+	IM            *goim.Client
+	Worker        *imjob.Worker
+	FileCleaner   *filejob.Cleaner
+	AccountPurger *accountjob.Purger
+	Locker        lock.Locker
 	// LockPrefix 是 cron 锁键前缀，调度器会拼接任务名得到最终键。
 	LockPrefix string
 }
@@ -92,6 +94,9 @@ func NewCronApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*Cron
 		}
 	}
 
+	users := accountrepo.NewUserRepo(db)
+	files := filerepo.New(db)
+
 	return &CronApp{
 		Config:  cfg,
 		Logger:  log,
@@ -99,13 +104,24 @@ func NewCronApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*Cron
 		Redis:   rdb,
 		Storage: storageClient,
 		IM:      im,
-		Worker: imjob.NewWorker(accountrepo.NewUserRepo(db), imClient{client: im}, outboxrepo.New(db), cfg.IM.OutboxBatchSize, timex.Now, log.Sugar(),
+		Worker: imjob.NewWorker(users, imClient{client: im}, outboxrepo.New(db), cfg.IM.OutboxBatchSize, timex.Now, log.Sugar(),
 			imjob.WithAvatarURL(func(objectKey string) string {
 				return cfg.Storage.PublicObjectURL(objectKey)
 			})),
-		FileCleaner: filejob.NewCleaner(filerepo.New(db), storageClient, cfg.Storage.CleanupBatchSize, timex.Now, log.Sugar()),
-		Locker:      redislock.NewRedisLocker(rdb, lock.WithDefaultTTL(cronLockTTL), lock.WithRetryStrategy(lock.NoRetry())),
-		LockPrefix:  fmt.Sprintf("%s:%s:cron", cfg.Redis.KeyPrefix, cfg.Env),
+		FileCleaner: filejob.NewCleaner(files, storageClient, cfg.Storage.CleanupBatchSize, timex.Now, log.Sugar()),
+		AccountPurger: accountjob.NewPurger(
+			users,
+			accountrepo.NewCredentialRepo(db),
+			accountrepo.NewSessionRepo(db),
+			accountrepo.NewDeviceRepo(db),
+			files,
+			repository.NewTxManager(db),
+			cfg.Account.PurgeBatchSize,
+			timex.Now,
+			log.Sugar(),
+		),
+		Locker:     redislock.NewRedisLocker(rdb, lock.WithDefaultTTL(cronLockTTL), lock.WithRetryStrategy(lock.NoRetry())),
+		LockPrefix: fmt.Sprintf("%s:%s:cron", cfg.Redis.KeyPrefix, cfg.Env),
 	}, nil
 }
 

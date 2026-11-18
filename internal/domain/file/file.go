@@ -60,11 +60,13 @@ type File struct {
 	Size      int64
 	SHA256    string
 	Status    int8
-	// UploadID 是 S3 分片上传 ID；单文件 PUT 上传为空。
+	// UploadID 是 S3 分片上传 ID；单文件 PUT 上传为空，分片合并成功后清空。
 	UploadID  string
 	ExpiresAt *time.Time
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// ObjectDeletedAt 是对象回收完成时间；nil 表示 status=2 但对象尚未确认删除。
+	ObjectDeletedAt *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // ValidateUpload 校验单文件上传申请：用途、MIME、大小与可选摘要。

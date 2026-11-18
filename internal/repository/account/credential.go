@@ -62,3 +62,10 @@ func (r *CredentialRepo) UpdatePasswordHash(ctx context.Context, userID int64, h
 		Where("user_id = ?", userID).
 		Updates(map[string]any{"password_hash": hash, "updated_at": at}).Error)
 }
+
+// DeleteByUser 删除用户密码凭证；不存在时视为成功。
+func (r *CredentialRepo) DeleteByUser(ctx context.Context, userID int64) error {
+	return r.dbFrom(ctx).
+		Where("user_id = ?", userID).
+		Delete(&model.Credential{}).Error
+}

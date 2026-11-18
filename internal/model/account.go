@@ -13,11 +13,13 @@ const (
 	UserStatusDeleted  int8 = 4
 )
 
-// IM 账号开通状态。
+// IM 账号状态。
 const (
 	IMStatusPending int8 = 0
 	IMStatusReady   int8 = 1
 	IMStatusFailed  int8 = 2
+	// IMStatusPurged 表示账号已注销，IM 侧资料已被占位处理。
+	IMStatusPurged int8 = 3
 )
 
 // User 是业务账号，ID 为自增主键。
@@ -30,6 +32,7 @@ type User struct {
 	Status      int8       `gorm:"column:status"`
 	IMStatus    int8       `gorm:"column:im_status"`
 	IMSyncedAt  *time.Time `gorm:"column:im_synced_at"`
+	PurgeAt     *time.Time `gorm:"column:purge_at"`
 	LastLoginAt *time.Time `gorm:"column:last_login_at"`
 	CreatedAt   time.Time  `gorm:"column:created_at"`
 	UpdatedAt   time.Time  `gorm:"column:updated_at"`

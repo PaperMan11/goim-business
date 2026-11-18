@@ -3,7 +3,7 @@ info:
   title: goim-business API
   version: 1.0.0
   description: |
-    goim-business 账号域、IM 凭证、用户资料、设备、客户端配置与文件直传（含分片上传）的 OpenAPI 契约，只描述当前已注册的 25 个 operation（24 条路径）。
+    goim-business 账号域、IM 凭证、用户资料、设备、客户端配置与文件直传（含分片上传）的 OpenAPI 契约，只描述当前已注册的 26 个 operation（25 条路径）。
 
     **统一响应约定**：除 `GET /client-config` 命中 ETag 时返回 304 外，所有接口的 HTTP 状态码恒为 200，
     业务结果一律由响应体 `code` 判断：`0` 表示成功，非 `0` 为业务错误码，错误提示见 `msg`，`data` 可能为空或携带明细。
@@ -18,7 +18,7 @@ info:
 
 tags:
   - name: Account
-    description: 账号注册、登录、令牌刷新、登出、会话管理与改密
+    description: 账号注册、登录、令牌刷新、登出、会话管理、改密与注销
   - name: IM
     description: IM token 兑换、开通状态查询与手动重试
   - name: Profile
@@ -173,6 +173,24 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/EmptyOK'
+
+  /account:
+    delete:
+      tags: [Account]
+      operationId: deleteAccount
+      summary: 注销账号
+      description: |
+        立即下线当前账号并同步 IM：撤销全部会话、清除 Redis 活跃标记与 IM token 缓存。
+        账号进入注销中（冷却期默认 15 天），冷却期内不可登录、不可调用业务接口，公开资料不可见。
+        冷却期结束后由后台任务物理清除本地敏感数据（资料、凭证、会话、设备）并回收文件对象。
+        重复调用幂等，返回相同的 purgeAt。
+        错误码：1002 未认证或登录态已失效、2003 账号已被冻结、1004 资源不存在、
+        1007 资源冲突、9001 服务内部错误、9002 依赖服务不可用。
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          $ref: '#/components/responses/DeleteAccountOK'
 
   /im/token:
     post:
@@ -647,6 +665,20 @@ components:
               - $ref: '#/components/schemas/EmptyResult'
               - $ref: '#/components/schemas/ErrorResponse'
 
+    DeleteAccountOK:
+      description: |
+        成功时 data 为 DeleteAccountResponse（code=0）；
+        业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/DeleteAccountResult'
+              - $ref: '#/components/schemas/ErrorResponse'
+
     IMTokenOK:
       description: |
         成功时 data 为 IMTokenResponse（code=0）；
@@ -921,6 +953,17 @@ components:
         oldPassword: Passw0rd!
         newPassword: NewPassw0rd!
 
+    DeleteAccountResponse:
+      type: object
+      description: 注销申请成功后的 data。
+      required: [purgeAt]
+      properties:
+        purgeAt:
+          type: string
+          format: date-time
+          description: 冷却期结束后的物理清除时间（UTC）；同一账号重复注销返回同一时间。
+          example: "2026-12-03T10:00:00Z"
+
     AuthResponse:
       type: object
       description: 注册/登录/刷新成功后的 data。
@@ -1029,6 +1072,21 @@ components:
       description: 活跃会话列表。
       items:
         $ref: '#/components/schemas/SessionView'
+
+    DeleteAccountResult:
+      type: object
+      description: 注销申请的成功响应体。
+      required: [code, msg, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 0
+        msg:
+          type: string
+          example: success
+        data:
+          $ref: '#/components/schemas/DeleteAccountResponse'
 
     AuthResult:
       type: object

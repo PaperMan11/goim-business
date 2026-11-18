@@ -145,6 +145,28 @@
           }
         }
       },
+      "DeleteAccountOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/DeleteAccountResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 DeleteAccountResponse（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
       "DeviceListOK": {
         "content": {
           "application/json": {
@@ -724,6 +746,44 @@
           },
           "data": {
             "$ref": "#/components/schemas/ClientConfigSchemaResponse"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "DeleteAccountResponse": {
+        "description": "注销申请成功后的 data。",
+        "properties": {
+          "purgeAt": {
+            "description": "冷却期结束后的物理清除时间（UTC）；同一账号重复注销返回同一时间。",
+            "example": "2026-12-03T10:00:00Z",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "purgeAt"
+        ],
+        "type": "object"
+      },
+      "DeleteAccountResult": {
+        "description": "注销申请的成功响应体。",
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/DeleteAccountResponse"
           },
           "msg": {
             "example": "success",
@@ -1885,12 +1945,32 @@
     }
   },
   "info": {
-    "description": "goim-business 账号域、IM 凭证、用户资料、设备、客户端配置与文件直传（含分片上传）的 OpenAPI 契约，只描述当前已注册的 25 个 operation（24 条路径）。\n\n**统一响应约定**：除 `GET /client-config` 命中 ETag 时返回 304 外，所有接口的 HTTP 状态码恒为 200，\n业务结果一律由响应体 `code` 判断：`0` 表示成功，非 `0` 为业务错误码，错误提示见 `msg`，`data` 可能为空或携带明细。\n因此成功与业务错误共用同一个 `200` 响应，客户端不要依赖 HTTP 状态码做分支。\n\n**鉴权**：需要登录态的接口携带 `Authorization: Bearer \u003caccess token\u003e`；\n`access token` 过期返回 `2004`，其余鉴权失败返回 `1002`。\n\n**常用错误码**：1001 参数错误、1002 未认证或登录态已失效、1029 请求过于频繁、\n2001 账号已存在、2002 账号或密码错误、2003 账号已被冻结、2004 access token 已过期、\n2005 刷新令牌已失效、2006 会话数量超出上限、9001 服务内部错误、9002 依赖服务不可用。\n\n\n**Apifox 导入**：选择 OpenAPI 3.0 → 导入本文件，环境变量以 servers 中的地址为 baseUrl；登录后把 access token 填入 Bearer Token。\n",
+    "description": "goim-business 账号域、IM 凭证、用户资料、设备、客户端配置与文件直传（含分片上传）的 OpenAPI 契约，只描述当前已注册的 26 个 operation（25 条路径）。\n\n**统一响应约定**：除 `GET /client-config` 命中 ETag 时返回 304 外，所有接口的 HTTP 状态码恒为 200，\n业务结果一律由响应体 `code` 判断：`0` 表示成功，非 `0` 为业务错误码，错误提示见 `msg`，`data` 可能为空或携带明细。\n因此成功与业务错误共用同一个 `200` 响应，客户端不要依赖 HTTP 状态码做分支。\n\n**鉴权**：需要登录态的接口携带 `Authorization: Bearer \u003caccess token\u003e`；\n`access token` 过期返回 `2004`，其余鉴权失败返回 `1002`。\n\n**常用错误码**：1001 参数错误、1002 未认证或登录态已失效、1029 请求过于频繁、\n2001 账号已存在、2002 账号或密码错误、2003 账号已被冻结、2004 access token 已过期、\n2005 刷新令牌已失效、2006 会话数量超出上限、9001 服务内部错误、9002 依赖服务不可用。\n",
     "title": "goim-business API",
     "version": "1.0.0"
   },
   "openapi": "3.0.3",
   "paths": {
+    "/account": {
+      "delete": {
+        "description": "立即下线当前账号并同步 IM：撤销全部会话、清除 Redis 活跃标记与 IM token 缓存。\n账号进入注销中（冷却期默认 15 天），冷却期内不可登录、不可调用业务接口，公开资料不可见。\n冷却期结束后由后台任务物理清除本地敏感数据（资料、凭证、会话、设备）并回收文件对象。\n重复调用幂等，返回相同的 purgeAt。\n错误码：1002 未认证或登录态已失效、2003 账号已被冻结、1004 资源不存在、\n1007 资源冲突、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "deleteAccount",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/DeleteAccountOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "注销账号",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
     "/account/login": {
       "post": {
         "description": "校验账号密码，成功后签发 access token / refresh token 并创建新会话。\n设备标识与客户端版本通过请求头传入（X-Device-Id 必填、X-Client-Version 可选），登录成功会在同一事务内登记设备。\n公开接口，受 IP 维度限流保护（默认 5 次/分钟）；登录失败次数超阈值同样返回 1029。\n错误码：1001 参数错误、2002 账号或密码错误、2003 账号已被冻结、1029 请求过于频繁、\n9001 服务内部错误、9002 依赖服务不可用。\n",
@@ -2589,17 +2669,12 @@
   },
   "servers": [
     {
-      "description": "本地开发",
-      "url": "http://127.0.0.1:18180/api/v1"
-    },
-    {
-      "description": "联调环境（API 与中间件同机时使用）",
-      "url": "http://192.168.241.128:18180/api/v1"
+      "url": "/api/v1"
     }
   ],
   "tags": [
     {
-      "description": "账号注册、登录、令牌刷新、登出、会话管理与改密",
+      "description": "账号注册、登录、令牌刷新、登出、会话管理、改密与注销",
       "name": "Account"
     },
     {

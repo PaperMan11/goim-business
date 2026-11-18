@@ -16,6 +16,8 @@ type fakeRepo struct {
 	records []*domain.File
 	// pending 为 false 时模拟记录已被 complete 处理，MarkDeletedIfPending 返回 false。
 	pending bool
+	// deletedObjects 是第二阶段待回收记录；为 nil 时不返回任何已删除对象。
+	deletedObjects []*domain.File
 }
 
 func (r *fakeRepo) Create(context.Context, *domain.File) error { return nil }
@@ -48,6 +50,38 @@ func (r *fakeRepo) MarkDeletedIfPending(_ context.Context, id, userID int64, at 
 		}
 	}
 	return false, nil
+}
+
+func (r *fakeRepo) ListDeletedObjects(_ context.Context, limit int) ([]*domain.File, error) {
+	out := make([]*domain.File, 0, len(r.deletedObjects))
+	for _, record := range r.deletedObjects {
+		if record.ObjectDeletedAt != nil {
+			continue
+		}
+		out = append(out, record)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeRepo) MarkObjectDeleted(_ context.Context, id int64, at time.Time) (bool, error) {
+	records := append(append([]*domain.File{}, r.records...), r.deletedObjects...)
+	for _, record := range records {
+		if record.ID != id || record.Status != domain.StatusDeleted || record.ObjectDeletedAt != nil {
+			continue
+		}
+		value := at
+		record.ObjectDeletedAt = &value
+		record.UpdatedAt = at
+		return true, nil
+	}
+	return false, nil
+}
+
+func (r *fakeRepo) MarkDeletedByUser(context.Context, int64, time.Time) (int64, error) {
+	return 0, nil
 }
 
 type fakeStorage struct {
@@ -115,8 +149,11 @@ func TestCleanerReclaimsExpiredPendingRecords(t *testing.T) {
 
 	result := cleaner.RunOnce(context.Background())
 	require.Equal(t, CleanupResult{Scanned: 2, Cleared: 2}, result)
-	require.Equal(t, []string{"attachment/7/file_a.pdf"}, storage.aborted, "分片上传应 abort 而不是删对象")
-	require.Equal(t, []string{"public/avatar/8/file_b.png"}, storage.deleted, "单文件 PUT 应删除可能残留的对象")
+	require.NotNil(t, expired[0].ObjectDeletedAt)
+	require.NotNil(t, expired[1].ObjectDeletedAt)
+	require.Equal(t, []string{"attachment/7/file_a.pdf"}, storage.aborted, "分片上传应先 abort 丢弃未合并分片")
+	require.Equal(t, []string{"attachment/7/file_a.pdf", "public/avatar/8/file_b.png"}, storage.deleted,
+		"abort 后仍需删除对象，避免已合并对象残留")
 	require.Equal(t, domain.StatusDeleted, expired[0].Status)
 	require.Equal(t, domain.StatusDeleted, expired[1].Status)
 }

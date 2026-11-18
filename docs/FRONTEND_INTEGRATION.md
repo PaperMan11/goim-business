@@ -91,6 +91,21 @@ await fetch(`${API_BASE}/devices/${encodeURIComponent(deviceId)}`, {
 
 移除当前设备后，本设备的 access token 立即失效（后续请求返回 `1002`），refresh token 也无法再次续期（返回 `1002`，即会话已失效）。前端应清除本地令牌并引导重新登录。
 
+## 5.1 注销账号
+
+- `DELETE /account`（Bearer 鉴权）：立即下线并进入注销中，冷却期（默认 15 天）结束后服务端物理清除资料、凭证、会话与设备，并回收文件对象。
+- 响应 `data.purgeAt` 是物理清除时间；重复调用幂等，返回同一时间。
+- 注销后无法登录、无法调用业务接口，公开资料也不再对外可见；前端应清除本地令牌并退出。
+
+```js
+const res = await fetch(`${API_BASE}/account`, {
+  method: 'DELETE',
+  headers: { Authorization: `Bearer ${accessToken}` },
+});
+const { data } = await res.json();
+// data.purgeAt: 冷却期结束后的物理清除时间
+```
+
 ## 6. 错误码与排障
 
 | 场景 | code | 排查 |

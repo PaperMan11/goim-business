@@ -13,13 +13,15 @@ CREATE TABLE account_users (
   avatar_key    VARCHAR(255) NOT NULL DEFAULT '' COMMENT '头像对象存储 key，不存完整 URL',
   bio           VARCHAR(255) NOT NULL DEFAULT '' COMMENT '个人简介',
   status        TINYINT      NOT NULL DEFAULT 1 COMMENT '账号状态：1正常 2冻结 3注销中 4已注销',
-  im_status     TINYINT      NOT NULL DEFAULT 0 COMMENT 'IM 账号开通状态：0待开通 1已开通 2失败',
+  im_status     TINYINT      NOT NULL DEFAULT 0 COMMENT 'IM 账号状态：0待开通 1已开通 2失败 3已注销',
   im_synced_at  DATETIME(3)  NULL COMMENT '最近一次与 IM 同步成功的时间；NULL 表示尚未同步',
+  purge_at      DATETIME(3)  NULL COMMENT '注销冷却期结束后的物理清除时间（UTC）；正常账号为 NULL',
   last_login_at DATETIME(3)  NULL COMMENT '最近一次登录成功时间；NULL 表示从未登录',
   created_at    DATETIME(3)  NOT NULL COMMENT '创建时间（UTC）',
   updated_at    DATETIME(3)  NOT NULL COMMENT '更新时间（UTC）',
   UNIQUE KEY uk_login_name (login_name) COMMENT '登录名唯一，支撑按登录名查找与注册去重',
-  KEY idx_status (status) COMMENT '按状态筛选，支撑冻结/注销账号的批量运维'
+  KEY idx_status (status) COMMENT '按状态筛选，支撑冻结/注销账号的批量运维',
+  KEY idx_status_purge (status, purge_at) COMMENT '扫描到期待清除账号，支撑注销冷却期后的异步清除'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='账号用户主表';
 
 -- 密码凭证表：与 account_users 一对一，独立成表便于后续扩展多种凭证类型。
