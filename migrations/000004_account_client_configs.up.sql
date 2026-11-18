@@ -10,7 +10,7 @@ CREATE TABLE client_configs (
   created_at DATETIME(3)  NOT NULL COMMENT '创建时间（UTC）',
   updated_at DATETIME(3)  NOT NULL COMMENT '更新时间（UTC）',
   UNIQUE KEY uk_platform (platform) COMMENT '每个平台只保留一行配置'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='客户端配置表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='客户端配置表';
 
 INSERT INTO client_configs (platform, version, content, created_at, updated_at) VALUES (
   0,

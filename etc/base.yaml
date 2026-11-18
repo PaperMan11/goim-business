@@ -1,7 +1,7 @@
 server:
-  http_addr: "0.0.0.0:8080"
-  probe_addr: "0.0.0.0:8081"
-  metrics_addr: "0.0.0.0:9091"
+  http_addr: "0.0.0.0:18180"
+  probe_addr: "0.0.0.0:18181"
+  metrics_addr: "0.0.0.0:19191"
   read_timeout: 15s
   write_timeout: 30s
   idle_timeout: 60s

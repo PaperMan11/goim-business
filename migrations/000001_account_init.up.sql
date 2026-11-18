@@ -20,14 +20,14 @@ CREATE TABLE account_users (
   updated_at    DATETIME(3)  NOT NULL COMMENT '更新时间（UTC）',
   UNIQUE KEY uk_login_name (login_name) COMMENT '登录名唯一，支撑按登录名查找与注册去重',
   KEY idx_status (status) COMMENT '按状态筛选，支撑冻结/注销账号的批量运维'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='账号用户主表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='账号用户主表';
 
 -- 密码凭证表：与 account_users 一对一，独立成表便于后续扩展多种凭证类型。
 CREATE TABLE account_credentials (
   user_id       BIGINT UNSIGNED NOT NULL PRIMARY KEY COMMENT '逻辑关联 account_users.id，同时作为主键保证一对一',
   password_hash VARCHAR(255) NOT NULL COMMENT '密码哈希：argon2id 编码串，禁止存明文或可逆密文',
   updated_at    DATETIME(3)  NOT NULL COMMENT '凭证最近变更时间（UTC），改密后用于审计'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='账号密码凭证表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='账号密码凭证表';
 
 -- 会话表：一次登录一行；刷新时旧行写 rotated_at，新行继承 family_id。
 -- 生命周期：创建（revoked_at/rotated_at 均为 NULL）→ 轮换（rotated_at 非空）或撤销（revoked_at 非空）。
@@ -49,4 +49,4 @@ CREATE TABLE account_sessions (
   UNIQUE KEY uk_refresh_hash (refresh_hash) COMMENT 'refresh token 摘要唯一，支撑刷新时精确定位会话',
   KEY idx_user_platform (user_id, platform) COMMENT '按用户与平台统计活跃会话，支撑每平台会话上限',
   KEY idx_family (family_id) COMMENT '按家族批量撤销，支撑重放检测后的整族下线'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='账号登录会话表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='账号登录会话表';

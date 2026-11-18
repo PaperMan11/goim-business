@@ -209,9 +209,9 @@ gin.New()
 
 | Server | 地址配置 | 默认端口 | 用途 |
 |---|---|---|---|
-| API | `server.http_addr` | 8080 | `/api/v1` 业务接口 |
-| Probe | `server.probe_addr` | 8081 | `/healthz`、`/readyz` |
-| Metrics | `server.metrics_addr` | 9091 | `/metrics`（Prometheus 抓取） |
+| API | `server.http_addr` | 18180 | `/api/v1` 业务接口 |
+| Probe | `server.probe_addr` | 18181 | `/healthz`、`/readyz` |
+| Metrics | `server.metrics_addr` | 19191 | `/metrics`（Prometheus 抓取） |
 
 启动顺序：加载配置 → 初始化 zap → 连接 MySQL/Redis（各 5s Ping 超时）→ 装配 `app.App` → 启动三个 Server。任一 Server 异常退出都会触发其他 Server 的优雅关闭（SIGINT/SIGTERM）。
 
@@ -261,9 +261,9 @@ gin.New()
 
 ```yaml
 server:
-  http_addr: "0.0.0.0:8080"
-  probe_addr: "0.0.0.0:8081"
-  metrics_addr: "0.0.0.0:9091"
+  http_addr: "0.0.0.0:18180"
+  probe_addr: "0.0.0.0:18181"
+  metrics_addr: "0.0.0.0:19191"
   read_timeout: 15s
   write_timeout: 30s
   idle_timeout: 60s
@@ -578,7 +578,7 @@ services:
 - 三个二进制均使用 `CGO_ENABLED=0`、`-trimpath`、`-ldflags "-s -w"`；`api` 与 `cron` 额外注入 `-X main.version=$(VERSION)`。
 - 其他目标：`tidy`、`test`（`go test ./...`）、`vet`（`go vet ./...`）、`run`、`run-cron`、`migrate-up`、`migrate-down`、`compose-up`、`compose-down`、`image`。
 
-**Dockerfile（✅）**：`golang:1.24-alpine` 构建，产出 `/out/api`、`/out/migrate`、`/out/cron`；运行阶段基于 `gcr.io/distroless/static-debian12:nonroot`，复制 `etc/` 到 `/app/etc` 并设 `GOIM_BIZ_CONFIG_DIR=/app/etc`，非 root 运行，暴露 8080/8081/9091，入口 `/app/api`。cron 进程复用同一镜像，部署时覆盖 command 为 `/app/cron`。
+**Dockerfile（✅）**：`golang:1.24-alpine` 构建，产出 `/out/api`、`/out/migrate`、`/out/cron`；运行阶段基于 `gcr.io/distroless/static-debian12:nonroot`，复制 `etc/` 到 `/app/etc` 并设 `GOIM_BIZ_CONFIG_DIR=/app/etc`，非 root 运行，暴露 18180/18181/19191，入口 `/app/api`。cron 进程复用同一镜像，部署时覆盖 command 为 `/app/cron`。
 
 **CI（`.github/workflows/ci.yml`，✅）**：在 push 到 main/master 与 PR 时触发，使用 Go 1.24，依次执行 `go mod download`、`go build ./...`、`go vet ./...`、`go test -race ./...`。
 
@@ -598,9 +598,9 @@ services:
 
 | 端点 | 端口 | 语义 | 当前内容 |
 |---|---|---|---|
-| `GET /healthz` | 8081 | liveness | 直接返回 `ok` |
-| `GET /readyz` | 8081 | readiness | MySQL `Ping` + Redis `Ping`，任一失败返回 503 |
-| `GET /metrics` | 9091 | 指标 | `promhttp.Handler()` |
+| `GET /healthz` | 18181 | liveness | 直接返回 `ok` |
+| `GET /readyz` | 18181 | readiness | MySQL `Ping` + Redis `Ping`，任一失败返回 503 |
+| `GET /metrics` | 19191 | 指标 | `promhttp.Handler()` |
 
 尚未实现（⏳）：`pre_stop_delay`、readyz 中的迁移版本匹配、独立 worker 的停机等待、goim 可用性指标与降级逻辑。
 
@@ -1229,9 +1229,9 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 
 | 方法 | 路径 | 端口 | 说明 | 状态 |
 |---|---|---|---|---|
-| GET | `/healthz` | 8081 | 存活 | ✅ |
-| GET | `/readyz` | 8081 | 就绪（MySQL + Redis） | ✅ |
-| GET | `/metrics` | 9091 | Prometheus | ✅ |
+| GET | `/healthz` | 18181 | 存活 | ✅ |
+| GET | `/readyz` | 18181 | 就绪（MySQL + Redis） | ✅ |
+| GET | `/metrics` | 19191 | Prometheus | ✅ |
 
 ---
 

@@ -20,4 +20,4 @@ CREATE TABLE file_objects (
   UNIQUE KEY uk_object_key (object_key) COMMENT '对象路径唯一，防止覆盖他人文件',
   KEY idx_user_status (user_id, status, created_at) COMMENT '按用户与状态查询文件列表、统计配额',
   KEY idx_status_expires (status, expires_at) COMMENT '扫描超时 pending 记录，支撑清理任务'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='文件对象元数据表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='文件对象元数据表';

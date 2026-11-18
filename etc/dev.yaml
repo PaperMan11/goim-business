@@ -4,10 +4,34 @@ log:
   level: debug
 
 mysql:
-  dsn: "root:devpass@tcp(127.0.0.1:3306)/goim_business?charset=utf8mb4&parseTime=True&loc=UTC"
+  dsn: "root:123456@tcp(192.168.241.128:3306)/goim_business?charset=utf8mb4&parseTime=True&loc=UTC"
+
+redis:
+  addr: "192.168.241.128:6379"
+  password: "123456"
+  db: 0
+
+# 开发环境的 RustFS（S3 兼容）；secret 可被 GOIM_BIZ_STORAGE__SECRET_KEY 覆盖。
+storage:
+  endpoint: "http://192.168.241.128:9000"
+  # 客户端直传/播放地址；本地开发直接用同一地址，生产应换成公网域名或 CDN。
+  public_endpoint: "http://192.168.241.128:9000"
+  access_key: "rustfsadmin"
+  secret_key: "rustfsadmin"
+  bucket: "goim-business"
+  use_path_style: true
+
+# 开发环境 goim im-api；admin_secret 可被 GOIM_BIZ_IM__ADMIN_SECRET 覆盖。
+im:
+  base_url: "http://192.168.241.128:18880"
+  api_base_url: "http://192.168.241.128:18880"
+  # msggateway 的 WebSocket 监听端口（WsServer.Port）。
+  ws_url: "ws://192.168.241.128:50001/ws"
+  admin_user_id: "imAdmin"
+  admin_secret: "goim-admin-secret-231515sfgsgsdg23&@%@!%#"
 
 auth:
-  jwt_secret: "dev-only-jwt-secret-change-before-deploy"
+  jwt_secret: "4D8F7D7EE2BFD58C3E1107DC108FA6EFBCE4C941BC6CFC798F0C338733F1A5BA1651E3CC1B9159B2F2E24AA5283C317C"
 
 cors:
   allowed_origins:

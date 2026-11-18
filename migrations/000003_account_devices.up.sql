@@ -14,4 +14,4 @@ CREATE TABLE account_devices (
   updated_at     DATETIME(3)  NOT NULL COMMENT '更新时间（UTC）',
   UNIQUE KEY uk_user_device (user_id, device_id) COMMENT '同一用户同一设备只保留一行',
   KEY idx_user_active (user_id, last_active_at) COMMENT '按用户列出设备并按活跃时间排序'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='账号设备注册表';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='账号设备注册表';

@@ -18,5 +18,5 @@ COPY --from=build /out/cron /app/cron
 COPY --from=build /src/etc /app/etc
 ENV GOIM_BIZ_CONFIG_DIR=/app/etc
 USER nonroot:nonroot
-EXPOSE 8080 8081 9091
+EXPOSE 18180 18181 19191
 ENTRYPOINT ["/app/api"]

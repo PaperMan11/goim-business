@@ -1,0 +1,2626 @@
+{
+  "components": {
+    "headers": {
+      "XRequestID": {
+        "description": "本次请求的追踪 ID；请求未携带 X-Request-ID 时由服务端生成 UUIDv7 并回写。",
+        "required": false,
+        "schema": {
+          "example": "0190f7a2-6d0e-7c1b-8f58-0e8f0d9c1234",
+          "type": "string"
+        }
+      }
+    },
+    "parameters": {
+      "FileID": {
+        "description": "申请上传时返回的文件 ID（十进制数字字符串）。",
+        "example": "18",
+        "in": "path",
+        "name": "fileId",
+        "required": true,
+        "schema": {
+          "pattern": "^[1-9][0-9]*$",
+          "type": "string"
+        }
+      },
+      "XClientPlatform": {
+        "description": "客户端平台。缺省按 Web（平台 ID 5）处理。\n支持字符串 ios / android / windows / macos / web / harmony，或数字 1 / 2 / 3 / 4 / 5 / 11；\n非法取值返回 1001。该值只影响新会话记录的 platform 字段。\n",
+        "in": "header",
+        "name": "X-Client-Platform",
+        "required": false,
+        "schema": {
+          "default": "web",
+          "enum": [
+            "ios",
+            "android",
+            "windows",
+            "macos",
+            "web",
+            "harmony",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "11"
+          ],
+          "example": "web",
+          "type": "string"
+        }
+      },
+      "XClientVersion": {
+        "description": "客户端版本号，最长 32 个字符；可选，仅用于设备登记与观测，缺失按空值处理。",
+        "example": "1.0.0",
+        "in": "header",
+        "name": "X-Client-Version",
+        "required": false,
+        "schema": {
+          "maxLength": 32,
+          "type": "string"
+        }
+      },
+      "XDeviceID": {
+        "description": "客户端设备标识，1-64 个字符；登录/注册必填，缺失或超长返回 1001。",
+        "example": "web-device-001",
+        "in": "header",
+        "name": "X-Device-Id",
+        "required": true,
+        "schema": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        }
+      }
+    },
+    "responses": {
+      "AuthOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/AuthResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 AuthResponse（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "ClientConfigOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ClientConfigResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 ClientConfigResponse（code=0），并返回 ETag；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "ETag": {
+            "description": "当前配置的强 ETag，格式为 \"cfg-\u003cplatform\u003e-\u003cversion\u003e\"。",
+            "example": "\"cfg-5-1\"",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "ClientConfigSchemaOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ClientConfigSchemaResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 ClientConfigSchemaResponse（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "DeviceListOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/DeviceListResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 DeviceView 数组（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "EmptyOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/EmptyResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 code=0，data 为 null 或被省略；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "FileOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/FileResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 FileView（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "FilePresignOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/FilePresignResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 FilePresignResponse（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "FileURLOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/FileURLResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 FileURLResponse（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "IMStatusOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/IMStatusResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 IMStatusResponse（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "IMTokenOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/IMTokenResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 IMTokenResponse（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "MultipartPresignOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/MultipartPresignResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 MultipartPresignResponse（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "NotModified": {
+        "description": "If-None-Match 命中当前 ETag，配置未变化，响应无 body。",
+        "headers": {
+          "ETag": {
+            "description": "当前配置的强 ETag。",
+            "example": "\"cfg-5-1\"",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "ProfileListOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ProfileListResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 PublicProfileView 数组（code=0），不存在的用户不出现在结果中；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "ProfileOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ProfileResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 ProfileView（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "PublicProfileOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/PublicProfileResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 PublicProfileView（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      },
+      "SessionListOK": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/SessionListResult"
+                },
+                {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              ]
+            }
+          }
+        },
+        "description": "成功时 data 为 SessionView 数组（code=0）；\n业务失败时 HTTP 状态仍为 200，body 为 ErrorResponse。\n",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestID"
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AuthResponse": {
+        "description": "注册/登录/刷新成功后的 data。",
+        "properties": {
+          "platform": {
+            "description": "平台 ID：iOS=1、Android=2、Windows=3、macOS=4、Web=5、HarmonyOS=11。",
+            "enum": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              11
+            ],
+            "example": 5,
+            "format": "int32",
+            "type": "integer"
+          },
+          "refreshExpiresIn": {
+            "description": "refresh token 有效期（秒）。",
+            "example": 2592000,
+            "format": "int64",
+            "type": "integer"
+          },
+          "refreshToken": {
+            "description": "刷新令牌；authResp 始终写入，DTO 中带 omitempty。",
+            "example": "rt_7d3c9f1a2b4e6d8f",
+            "type": "string"
+          },
+          "sessionId": {
+            "description": "新创建的会话 ID（十进制数字字符串）。",
+            "example": "123456789",
+            "type": "string"
+          },
+          "token": {
+            "$ref": "#/components/schemas/TokenView"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserView"
+          }
+        },
+        "required": [
+          "user",
+          "token",
+          "refreshExpiresIn",
+          "sessionId",
+          "platform"
+        ],
+        "type": "object"
+      },
+      "AuthResult": {
+        "description": "注册/登录/刷新的成功响应体。",
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/AuthResponse"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "BatchProfilesRequest": {
+        "description": "批量查询公开资料请求；不存在的用户会被跳过。",
+        "example": {
+          "userIds": [
+            "123456789",
+            "987654321"
+          ]
+        },
+        "properties": {
+          "userIds": {
+            "description": "用户 ID 列表（十进制数字字符串），1-100 个。",
+            "items": {
+              "example": "123456789",
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "userIds"
+        ],
+        "type": "object"
+      },
+      "ChangePasswordRequest": {
+        "description": "修改密码请求。",
+        "example": {
+          "newPassword": "NewPassw0rd!",
+          "oldPassword": "Passw0rd!"
+        },
+        "properties": {
+          "newPassword": {
+            "description": "新密码；8-64 字节且同时包含字母与数字。",
+            "example": "NewPassw0rd!",
+            "maxLength": 64,
+            "minLength": 8,
+            "type": "string"
+          },
+          "oldPassword": {
+            "description": "原密码。",
+            "example": "Passw0rd!",
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "oldPassword",
+          "newPassword"
+        ],
+        "type": "object"
+      },
+      "ClientConfigIM": {
+        "description": "配置中与 IM 连接相关的运行期信息。",
+        "properties": {
+          "apiBaseUrl": {
+            "description": "客户端访问 IM HTTP 接口的根地址；IM 未配置时为空字符串。",
+            "example": "https://im.example.com/api/v1",
+            "type": "string"
+          },
+          "platformId": {
+            "description": "请求时使用的平台 ID。",
+            "enum": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              11
+            ],
+            "example": 5,
+            "format": "int32",
+            "type": "integer"
+          },
+          "wsUrl": {
+            "description": "IM WebSocket 地址；未配置时为空字符串。",
+            "example": "wss://im.example.com/ws",
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiBaseUrl",
+          "wsUrl",
+          "platformId"
+        ],
+        "type": "object"
+      },
+      "ClientConfigItemSchema": {
+        "description": "单个配置项的类型、默认值与适用范围。",
+        "properties": {
+          "default": {
+            "description": "默认值，类型由 type 决定（布尔、整数或字符串）。",
+            "example": true
+          },
+          "key": {
+            "description": "配置项路径，如 features.fileUpload。",
+            "example": "features.fileUpload",
+            "type": "string"
+          },
+          "scope": {
+            "description": "适用范围：all / web / desktop / runtime。",
+            "example": "all",
+            "type": "string"
+          },
+          "type": {
+            "description": "值类型：bool / int64 / string。",
+            "enum": [
+              "bool",
+              "int64",
+              "string"
+            ],
+            "example": "bool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "type",
+          "scope"
+        ],
+        "type": "object"
+      },
+      "ClientConfigResponse": {
+        "description": "客户端启动配置。",
+        "properties": {
+          "configVersion": {
+            "description": "配置版本；版本变化后旧 ETag 不再命中。",
+            "example": 1,
+            "format": "int32",
+            "type": "integer"
+          },
+          "features": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "description": "功能开关。",
+            "example": {
+              "fileUpload": true,
+              "voiceMessage": false
+            },
+            "type": "object"
+          },
+          "im": {
+            "$ref": "#/components/schemas/ClientConfigIM"
+          },
+          "limits": {
+            "additionalProperties": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "description": "客户端限制值。",
+            "example": {
+              "maxAvatarBytes": 5242880,
+              "maxUploadBytes": 104857600
+            },
+            "type": "object"
+          },
+          "minAppVersion": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "各端最低版本要求。",
+            "example": {
+              "desktop": "1.0.0",
+              "web": "1.0.0"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "configVersion",
+          "features",
+          "im",
+          "limits",
+          "minAppVersion"
+        ],
+        "type": "object"
+      },
+      "ClientConfigResult": {
+        "description": "客户端配置查询的成功响应体。",
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ClientConfigResponse"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "ClientConfigSchemaResponse": {
+        "description": "配置项元数据。",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ClientConfigItemSchema"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ClientConfigSchemaResult": {
+        "description": "配置项元数据的成功响应体。",
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ClientConfigSchemaResponse"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "DeviceListResult": {
+        "description": "设备列表查询的成功响应体。",
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/DeviceViewList"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "DeviceView": {
+        "description": "对外暴露的设备信息，不含推送 token。",
+        "properties": {
+          "appVersion": {
+            "example": "1.2.0",
+            "type": "string"
+          },
+          "deviceId": {
+            "example": "web-device-001",
+            "type": "string"
+          },
+          "lastActiveAt": {
+            "example": "2026-11-17T10:00:00+08:00",
+            "format": "date-time",
+            "type": "string"
+          },
+          "platform": {
+            "description": "平台 ID：iOS=1、Android=2、Windows=3、macOS=4、Web=5、HarmonyOS=11。",
+            "enum": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              11
+            ],
+            "example": 5,
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deviceId",
+          "platform",
+          "appVersion",
+          "lastActiveAt"
+        ],
+        "type": "object"
+      },
+      "DeviceViewList": {
+        "description": "设备列表。",
+        "items": {
+          "$ref": "#/components/schemas/DeviceView"
+        },
+        "type": "array"
+      },
+      "EmptyResult": {
+        "description": "无业务数据的成功响应体。",
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "description": "成功时为 null 或被省略。",
+            "nullable": true,
+            "type": "object"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg"
+        ],
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "description": "统一业务错误响应体（HTTP 状态仍为 200）。\ncode 取自 errcode：1001 参数错误、1002 未认证、1004 资源不存在、1029 限流、\n2001-2006 账号域错误、9001 内部错误、9002 依赖服务不可用。\n",
+        "example": {
+          "code": 1001,
+          "data": {
+            "Password": "min"
+          },
+          "msg": "参数错误"
+        },
+        "properties": {
+          "code": {
+            "description": "业务错误码，非 0。",
+            "example": 1001,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "additionalProperties": true,
+            "description": "错误明细；参数校验失败时为字段与校验规则的映射，其余多为 null 或被省略。",
+            "example": null,
+            "nullable": true,
+            "type": "object"
+          },
+          "msg": {
+            "description": "面向用户的错误提示。",
+            "example": "参数错误",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg"
+        ],
+        "type": "object"
+      },
+      "FilePresignRequest": {
+        "description": "申请文件直传；对象键由服务端生成，客户端不可指定。",
+        "properties": {
+          "fileName": {
+            "description": "客户端原始文件名，仅用于展示，不参与对象路径。",
+            "example": "me.png",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "mime": {
+            "description": "文件类型；必须与实际上传的 Content-Type 一致。",
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/webp"
+            ],
+            "example": "image/png",
+            "type": "string"
+          },
+          "purpose": {
+            "description": "文件用途；首版仅支持 avatar。",
+            "enum": [
+              "avatar"
+            ],
+            "example": "avatar",
+            "type": "string"
+          },
+          "sha256": {
+            "description": "可选的文件 SHA-256 十六进制摘要。",
+            "example": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "size": {
+            "description": "文件字节数；头像上限 5MB。",
+            "example": 120000,
+            "format": "int64",
+            "maximum": 5242880,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "purpose",
+          "mime",
+          "size"
+        ],
+        "type": "object"
+      },
+      "FilePresignResponse": {
+        "description": "直传签名信息；客户端按键值直接请求对象存储。",
+        "properties": {
+          "expiresAt": {
+            "description": "预签名 URL 过期时间（Unix 秒）。",
+            "example": 1763000600,
+            "format": "int64",
+            "type": "integer"
+          },
+          "fileId": {
+            "example": "18",
+            "type": "string"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "上传时必须携带的请求头（例如 Content-Type）。",
+            "example": {
+              "Content-Type": "image/png"
+            },
+            "type": "object"
+          },
+          "method": {
+            "enum": [
+              "PUT"
+            ],
+            "example": "PUT",
+            "type": "string"
+          },
+          "objectKey": {
+            "description": "bucket 内对象路径。公开资源位于 `public/\u003cpurpose\u003e/\u003cownerID\u003e/`（如头像），\n私有资源位于 `\u003cpurpose\u003e/\u003cownerID\u003e/`（如附件）。\n",
+            "example": "public/avatar/123/file_0198c2f0-6c1a-7b3e-9d4f-abcdef012345.png",
+            "type": "string"
+          },
+          "uploadUrl": {
+            "description": "预签名上传地址，有效期见 expiresAt。",
+            "example": "https://files.example.com/goim-business/public/avatar/123/0198c2f0....png?X-Amz-Algorithm=...",
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fileId",
+          "objectKey",
+          "uploadUrl",
+          "method",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "FilePresignResult": {
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/FilePresignResponse"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "FileResult": {
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/FileView"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "FileURLResponse": {
+        "description": "短时文件访问地址。",
+        "properties": {
+          "expiresAt": {
+            "description": "访问地址过期时间（Unix 秒）。",
+            "example": 1763000600,
+            "format": "int64",
+            "type": "integer"
+          },
+          "url": {
+            "example": "https://files.example.com/goim-business/attachment/123/a.pdf?X-Amz-Signature=...",
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "FileURLResult": {
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/FileURLResponse"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "FileView": {
+        "description": "文件元数据；状态 0 待上传、1 可用、2 已删除。",
+        "properties": {
+          "createdAt": {
+            "example": "2026-11-17T10:00:00+08:00",
+            "format": "date-time",
+            "type": "string"
+          },
+          "fileId": {
+            "example": "18",
+            "type": "string"
+          },
+          "mime": {
+            "example": "image/png",
+            "type": "string"
+          },
+          "objectKey": {
+            "description": "bucket 内对象路径；公开资源为 `public/\u003cpurpose\u003e/...`，私有资源为 `\u003cpurpose\u003e/...`。\n",
+            "example": "public/avatar/123/file_0198c2f0-6c1a-7b3e-9d4f-abcdef012345.png",
+            "type": "string"
+          },
+          "purpose": {
+            "example": "avatar",
+            "type": "string"
+          },
+          "sha256": {
+            "example": "",
+            "type": "string"
+          },
+          "size": {
+            "example": 120000,
+            "format": "int64",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              0,
+              1,
+              2
+            ],
+            "example": 1,
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fileId",
+          "purpose",
+          "objectKey",
+          "mime",
+          "size",
+          "status",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "IMStatusResponse": {
+        "description": "IM 账号开通状态。",
+        "properties": {
+          "status": {
+            "description": "开通状态：0 待开通、1 已开通、2 失败。",
+            "enum": [
+              0,
+              1,
+              2
+            ],
+            "example": 1,
+            "format": "int32",
+            "type": "integer"
+          },
+          "syncedAt": {
+            "description": "最近一次开通成功的时间；待开通或失败时为 null。",
+            "example": "2026-11-16T10:00:00+08:00",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "userId": {
+            "description": "用户 ID（十进制数字字符串），同时就是 IM userID。",
+            "example": "123456789",
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "status",
+          "syncedAt"
+        ],
+        "type": "object"
+      },
+      "IMStatusResult": {
+        "description": "IM 开通状态的成功响应体。",
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/IMStatusResponse"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "IMTokenResponse": {
+        "description": "IM token 兑换成功后的 data。",
+        "properties": {
+          "apiBaseUrl": {
+            "description": "客户端访问 IM HTTP 接口的根地址。",
+            "example": "https://im.example.com/api/v1",
+            "type": "string"
+          },
+          "expireTimeSeconds": {
+            "description": "token 剩余有效期（秒），服务端已扣除缓存安全窗口。",
+            "example": 86400,
+            "format": "int64",
+            "type": "integer"
+          },
+          "platformId": {
+            "description": "平台 ID：iOS=1、Android=2、Windows=3、macOS=4、Web=5、HarmonyOS=11。",
+            "enum": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              11
+            ],
+            "example": 5,
+            "format": "int32",
+            "type": "integer"
+          },
+          "token": {
+            "description": "IM 侧签发的 user token。",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.im-token.example",
+            "type": "string"
+          },
+          "userId": {
+            "description": "用户 ID（十进制数字字符串），同时就是 IM userID。",
+            "example": "123456789",
+            "type": "string"
+          },
+          "wsUrl": {
+            "description": "客户端连接 IM WebSocket 的地址；未配置时为空字符串。",
+            "example": "wss://im.example.com/ws",
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "token",
+          "expireTimeSeconds",
+          "apiBaseUrl",
+          "wsUrl",
+          "platformId"
+        ],
+        "type": "object"
+      },
+      "IMTokenResult": {
+        "description": "IM token 兑换的成功响应体。",
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/IMTokenResponse"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "LoginRequest": {
+        "description": "登录请求；设备标识与版本通过 X-Device-Id / X-Client-Version 请求头传入。",
+        "example": {
+          "loginName": "alice",
+          "password": "Passw0rd!"
+        },
+        "properties": {
+          "loginName": {
+            "description": "登录名；服务端会去空格并转小写。",
+            "example": "alice",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "password": {
+            "description": "明文密码。",
+            "example": "Passw0rd!",
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "loginName",
+          "password"
+        ],
+        "type": "object"
+      },
+      "MultipartCompleteRequest": {
+        "properties": {
+          "parts": {
+            "description": "必须与服务端返回的 partCount 一致，且 partNumber 从 1 连续递增。",
+            "items": {
+              "$ref": "#/components/schemas/MultipartCompletedPart"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "parts"
+        ],
+        "type": "object"
+      },
+      "MultipartCompletedPart": {
+        "properties": {
+          "etag": {
+            "description": "分片 PUT 响应头 ETag 的原值（通常带双引号）。",
+            "example": "\"d41d8cd98f00b204e9800998ecf8427e\"",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "partNumber": {
+            "example": 1,
+            "format": "int32",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "partNumber",
+          "etag"
+        ],
+        "type": "object"
+      },
+      "MultipartPartPresign": {
+        "properties": {
+          "expiresAt": {
+            "description": "预签名过期时间（Unix 秒）。",
+            "example": 1763000600,
+            "format": "int64",
+            "type": "integer"
+          },
+          "partNumber": {
+            "example": 1,
+            "format": "int32",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "url": {
+            "description": "分片 PUT 预签名地址。",
+            "example": "https://files.example.com/goim-business/attachment/123/file_....pdf?partNumber=1\u0026X-Amz-Signature=...",
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "partNumber",
+          "url",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "MultipartPartsRequest": {
+        "description": "刷新分片签名；不传 partNumbers 表示刷新全部分片。",
+        "properties": {
+          "partNumbers": {
+            "description": "需要刷新的分片号，必须严格递增且不超过 partCount。",
+            "example": [
+              1,
+              2
+            ],
+            "items": {
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "MultipartPresignRequest": {
+        "description": "申请分片上传；仅 attachment 用途，8MB \u003c size ≤ 200MB。",
+        "properties": {
+          "fileName": {
+            "example": "report.pdf",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "mime": {
+            "description": "附件类型白名单。",
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/webp",
+              "image/gif",
+              "application/pdf",
+              "application/zip",
+              "text/plain",
+              "video/mp4",
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            ],
+            "example": "application/pdf",
+            "type": "string"
+          },
+          "purpose": {
+            "enum": [
+              "attachment"
+            ],
+            "example": "attachment",
+            "type": "string"
+          },
+          "sha256": {
+            "example": "",
+            "pattern": "^[0-9a-fA-F]{64}$",
+            "type": "string"
+          },
+          "size": {
+            "description": "文件总字节数；超过 8MB 才需要分片，最大 200MB。",
+            "example": 12582912,
+            "format": "int64",
+            "maximum": 209715200,
+            "minimum": 8388609,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "purpose",
+          "mime",
+          "size"
+        ],
+        "type": "object"
+      },
+      "MultipartPresignResponse": {
+        "properties": {
+          "expiresAt": {
+            "description": "全部分片 URL 的统一过期时间（Unix 秒）。",
+            "example": 1763000600,
+            "format": "int64",
+            "type": "integer"
+          },
+          "fileId": {
+            "example": "21",
+            "type": "string"
+          },
+          "objectKey": {
+            "example": "attachment/123/file_0198c2f0-6c1a-7b3e-9d4f-abcdef012345.pdf",
+            "type": "string"
+          },
+          "partCount": {
+            "example": 2,
+            "format": "int32",
+            "type": "integer"
+          },
+          "partSize": {
+            "example": 8388608,
+            "format": "int64",
+            "type": "integer"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/MultipartPartPresign"
+            },
+            "type": "array"
+          },
+          "uploadId": {
+            "description": "S3 Multipart 上传 ID；complete/abort 由服务端按 fileId 查找，无需回传。",
+            "example": "2~abc123...",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fileId",
+          "objectKey",
+          "uploadId",
+          "partSize",
+          "partCount",
+          "parts",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "MultipartPresignResult": {
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/MultipartPresignResponse"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "ProfileListResult": {
+        "description": "批量公开资料查询的成功响应体。",
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/PublicProfileViewList"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "ProfileResult": {
+        "description": "本人资料查询/更新的成功响应体。",
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ProfileView"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "ProfileView": {
+        "description": "当前用户的完整资料。",
+        "properties": {
+          "avatarKey": {
+            "description": "头像对象 key，用于更新资料时回传，不直接对外使用。\n为空表示未设置头像。\n",
+            "example": "public/avatar/123/0198c2f0....png",
+            "type": "string"
+          },
+          "avatarUrl": {
+            "description": "头像公开访问 URL，由 avatarKey 解析得到；为空表示未设置头像。\n该地址稳定不过期，任何人可直接 GET（仅 public/ 命名空间由部署侧开放匿名读）。\n",
+            "example": "https://files.example.com/goim-business/public/avatar/123/0198c2f0....png",
+            "format": "uri",
+            "type": "string"
+          },
+          "bio": {
+            "description": "个性签名；最长 255 个字符，为空表示未设置。",
+            "example": "你好，世界",
+            "type": "string"
+          },
+          "loginName": {
+            "example": "alice",
+            "type": "string"
+          },
+          "nickname": {
+            "description": "昵称；最长 64 个字符，不会为空。",
+            "example": "Alice",
+            "type": "string"
+          },
+          "userId": {
+            "description": "用户 ID（十进制数字字符串）。",
+            "example": "123456789",
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "loginName",
+          "nickname",
+          "avatarKey",
+          "avatarUrl",
+          "bio"
+        ],
+        "type": "object"
+      },
+      "PublicProfileResult": {
+        "description": "单用户公开资料查询的成功响应体。",
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/PublicProfileView"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "PublicProfileView": {
+        "description": "他人可见的公开资料，不含登录名与签名。",
+        "properties": {
+          "avatarKey": {
+            "description": "头像对象 key；为空表示未设置头像。",
+            "example": "public/avatar/123/0198c2f0....png",
+            "type": "string"
+          },
+          "avatarUrl": {
+            "description": "头像公开访问 URL；为空表示未设置头像。客户端直接渲染该地址，无需再换取签名 URL。\n",
+            "example": "https://files.example.com/goim-business/public/avatar/123/0198c2f0....png",
+            "format": "uri",
+            "type": "string"
+          },
+          "nickname": {
+            "example": "Alice",
+            "type": "string"
+          },
+          "userId": {
+            "description": "用户 ID（十进制数字字符串）。",
+            "example": "123456789",
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "nickname",
+          "avatarKey",
+          "avatarUrl"
+        ],
+        "type": "object"
+      },
+      "PublicProfileViewList": {
+        "description": "公开资料列表。",
+        "items": {
+          "$ref": "#/components/schemas/PublicProfileView"
+        },
+        "type": "array"
+      },
+      "RefreshRequest": {
+        "description": "刷新令牌请求；空 refreshToken 返回 1002。",
+        "example": {
+          "refreshToken": "rt_7d3c9f1a2b4e6d8f"
+        },
+        "properties": {
+          "refreshToken": {
+            "description": "登录/注册/上次刷新返回的 refreshToken。",
+            "example": "rt_7d3c9f1a2b4e6d8f",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RegisterRequest": {
+        "description": "注册请求；设备标识与版本通过 X-Device-Id / X-Client-Version 请求头传入。",
+        "example": {
+          "loginName": "alice",
+          "nickname": "Alice",
+          "password": "Passw0rd!"
+        },
+        "properties": {
+          "loginName": {
+            "description": "登录名；服务端归一化为小写，仅允许 3-64 位字母、数字、下划线。",
+            "example": "alice",
+            "maxLength": 64,
+            "minLength": 3,
+            "type": "string"
+          },
+          "nickname": {
+            "description": "昵称；最长 64 个字符，为空时回退为登录名。",
+            "example": "Alice",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "password": {
+            "description": "明文密码；8-64 字节且同时包含字母与数字。",
+            "example": "Passw0rd!",
+            "maxLength": 64,
+            "minLength": 8,
+            "type": "string"
+          }
+        },
+        "required": [
+          "loginName",
+          "password"
+        ],
+        "type": "object"
+      },
+      "RevokeSessionRequest": {
+        "description": "撤销指定会话请求。",
+        "example": {
+          "sessionId": "123456789"
+        },
+        "properties": {
+          "sessionId": {
+            "description": "会话 ID（十进制数字字符串）；非数字返回 1001。",
+            "example": "123456789",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId"
+        ],
+        "type": "object"
+      },
+      "SessionListResult": {
+        "description": "会话列表的成功响应体。",
+        "properties": {
+          "code": {
+            "example": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "data": {
+            "$ref": "#/components/schemas/SessionViewList"
+          },
+          "msg": {
+            "example": "success",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "msg",
+          "data"
+        ],
+        "type": "object"
+      },
+      "SessionView": {
+        "description": "对外暴露的会话信息，不含任何令牌。",
+        "properties": {
+          "createdAt": {
+            "example": "2026-11-14T10:00:00+08:00",
+            "format": "date-time",
+            "type": "string"
+          },
+          "current": {
+            "description": "是否为当前请求所在的会话。",
+            "example": true,
+            "type": "boolean"
+          },
+          "deviceId": {
+            "example": "web-device-001",
+            "type": "string"
+          },
+          "expiresAt": {
+            "example": "2026-12-14T10:00:00+08:00",
+            "format": "date-time",
+            "type": "string"
+          },
+          "ip": {
+            "example": "1.2.3.4",
+            "type": "string"
+          },
+          "lastSeenAt": {
+            "description": "最后活跃时间；当前实现不更新该字段，通常为 null。",
+            "example": null,
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "platform": {
+            "description": "平台 ID：iOS=1、Android=2、Windows=3、macOS=4、Web=5、HarmonyOS=11。",
+            "enum": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              11
+            ],
+            "example": 5,
+            "format": "int32",
+            "type": "integer"
+          },
+          "sessionId": {
+            "description": "会话 ID（十进制数字字符串）。",
+            "example": "123456789",
+            "type": "string"
+          },
+          "userAgent": {
+            "example": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sessionId",
+          "platform",
+          "deviceId",
+          "userAgent",
+          "ip",
+          "createdAt",
+          "lastSeenAt",
+          "expiresAt",
+          "current"
+        ],
+        "type": "object"
+      },
+      "SessionViewList": {
+        "description": "活跃会话列表。",
+        "items": {
+          "$ref": "#/components/schemas/SessionView"
+        },
+        "type": "array"
+      },
+      "TokenView": {
+        "description": "本次签发的访问令牌。",
+        "properties": {
+          "accessToken": {
+            "description": "access JWT，用于 Authorization: Bearer \u003ctoken\u003e。",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example.payload.signature",
+            "type": "string"
+          },
+          "expiresIn": {
+            "description": "access token 有效期（秒）。",
+            "example": 900,
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accessToken",
+          "expiresIn"
+        ],
+        "type": "object"
+      },
+      "UpdateProfileRequest": {
+        "description": "更新资料请求；字段缺省表示不修改，三个字段全部缺省返回 1001。\n昵称不能为空，头像 key 与签名传空字符串表示清空。\n",
+        "example": {
+          "bio": "你好，世界",
+          "nickname": "Alice"
+        },
+        "properties": {
+          "avatarKey": {
+            "description": "头像对象 key，取 `/files/presign` 或 complete 返回的 `objectKey`；最长 255 个字符。\n服务端据此生成公开 `avatarUrl`，传空字符串表示清空头像。\n",
+            "example": "public/avatar/123/0198c2f0....png",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "bio": {
+            "description": "个性签名；最长 255 个字符。",
+            "example": "你好，世界",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "nickname": {
+            "description": "昵称；最长 64 个字符，不能为空。",
+            "example": "Alice",
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UserView": {
+        "description": "账号基础信息。",
+        "properties": {
+          "loginName": {
+            "example": "alice",
+            "type": "string"
+          },
+          "nickname": {
+            "example": "Alice",
+            "type": "string"
+          },
+          "userId": {
+            "description": "用户 ID（十进制数字字符串），与 IM userID 一致。",
+            "example": "123456789",
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "loginName",
+          "nickname"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "bearerFormat": "JWT",
+        "description": "登录/注册/刷新签发的 access token，通过 Authorization: Bearer \u003ctoken\u003e 传递。",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "goim-business 账号域、IM 凭证、用户资料、设备、客户端配置与文件直传（含分片上传）的 OpenAPI 契约，只描述当前已注册的 25 个 operation（24 条路径）。\n\n**统一响应约定**：除 `GET /client-config` 命中 ETag 时返回 304 外，所有接口的 HTTP 状态码恒为 200，\n业务结果一律由响应体 `code` 判断：`0` 表示成功，非 `0` 为业务错误码，错误提示见 `msg`，`data` 可能为空或携带明细。\n因此成功与业务错误共用同一个 `200` 响应，客户端不要依赖 HTTP 状态码做分支。\n\n**鉴权**：需要登录态的接口携带 `Authorization: Bearer \u003caccess token\u003e`；\n`access token` 过期返回 `2004`，其余鉴权失败返回 `1002`。\n\n**常用错误码**：1001 参数错误、1002 未认证或登录态已失效、1029 请求过于频繁、\n2001 账号已存在、2002 账号或密码错误、2003 账号已被冻结、2004 access token 已过期、\n2005 刷新令牌已失效、2006 会话数量超出上限、9001 服务内部错误、9002 依赖服务不可用。\n\n\n**Apifox 导入**：选择 OpenAPI 3.0 → 导入本文件，环境变量以 servers 中的地址为 baseUrl；登录后把 access token 填入 Bearer Token。\n",
+    "title": "goim-business API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/account/login": {
+      "post": {
+        "description": "校验账号密码，成功后签发 access token / refresh token 并创建新会话。\n设备标识与客户端版本通过请求头传入（X-Device-Id 必填、X-Client-Version 可选），登录成功会在同一事务内登记设备。\n公开接口，受 IP 维度限流保护（默认 5 次/分钟）；登录失败次数超阈值同样返回 1029。\n错误码：1001 参数错误、2002 账号或密码错误、2003 账号已被冻结、1029 请求过于频繁、\n9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "loginAccount",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XClientPlatform"
+          },
+          {
+            "$ref": "#/components/parameters/XDeviceID"
+          },
+          {
+            "$ref": "#/components/parameters/XClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AuthOK"
+          }
+        },
+        "summary": "登录",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/account/logout": {
+      "post": {
+        "description": "撤销当前会话并清除 Redis 活跃标记；响应 data 为空。\n错误码：1002 未认证或登录态已失效、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "logoutAccount",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/EmptyOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "登出当前会话",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/account/password": {
+      "put": {
+        "description": "校验原密码后更新密码，并撤销除当前会话外的全部会话。\n原密码错误返回 2002；新密码不满足复杂度返回 1001。\n错误码：1001 参数错误、1002 未认证或登录态已失效、2002 账号或密码错误、\n9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "changePassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/EmptyOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "修改密码",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/account/refresh": {
+      "post": {
+        "description": "使用请求体中的 refreshToken 轮换令牌，请求体即凭证，不需要 Authorization 头。\n旧 refreshToken 被重放时会撤销整个令牌家族并返回 2005。\n错误码：1002 未认证或登录态已失效、2003 账号已被冻结、2005 刷新令牌已失效、\n9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "refreshToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AuthOK"
+          }
+        },
+        "summary": "刷新令牌",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/account/register": {
+      "post": {
+        "description": "注册成功即签发 access token / refresh token 并创建当前会话。\n设备标识与客户端版本通过请求头传入（X-Device-Id 必填、X-Client-Version 可选），并在同一事务内登记设备。\n公开接口，受 IP 维度限流保护（默认 3 次/小时）。\n错误码：1001 参数错误、2001 账号已存在、1029 请求过于频繁、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "registerAccount",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XClientPlatform"
+          },
+          {
+            "$ref": "#/components/parameters/XDeviceID"
+          },
+          {
+            "$ref": "#/components/parameters/XClientVersion"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AuthOK"
+          }
+        },
+        "summary": "注册账号",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/account/sessions": {
+      "get": {
+        "description": "列出当前用户全部活跃会话，`current` 标记当前请求所在会话。\n错误码：1002 未认证或登录态已失效、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "listSessions",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/SessionListOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "查询活跃会话",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/account/sessions/revoke": {
+      "post": {
+        "description": "撤销本人指定的会话；sessionId 非数字返回 1001，会话不存在或不属于本人返回 1004。\n错误码：1001 参数错误、1002 未认证或登录态已失效、1004 资源不存在、\n9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "revokeSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/EmptyOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "踢出指定会话",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/client-config": {
+      "get": {
+        "description": "公开接口。按 platform 读取配置（缺省 Web=5，取值同 X-Client-Platform），\n返回 configVersion 与 ETag；携带 If-None-Match 且命中时返回 304 且无响应体。\n配置表缺失时回退内置默认值。\n错误码：1001 参数错误、9001 服务内部错误、9002 依赖服务不可用（仍为 HTTP 200）。\n",
+        "operationId": "getClientConfig",
+        "parameters": [
+          {
+            "description": "客户端平台，支持 ios / android / windows / macos / web / harmony 或数字 1/2/3/4/5/11；缺省 web。",
+            "example": 5,
+            "in": "query",
+            "name": "platform",
+            "required": false,
+            "schema": {
+              "default": "web",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ClientConfigOK"
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          }
+        },
+        "summary": "获取客户端配置",
+        "tags": [
+          "ClientConfig"
+        ]
+      }
+    },
+    "/client-config/schema": {
+      "get": {
+        "description": "返回可配置项的类型、默认值与适用范围，供客户端渲染设置页与校验输入。",
+        "operationId": "getClientConfigSchema",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ClientConfigSchemaOK"
+          }
+        },
+        "summary": "配置项元数据",
+        "tags": [
+          "ClientConfig"
+        ]
+      }
+    },
+    "/devices": {
+      "get": {
+        "description": "设备随注册/登录自动登记；返回当前用户已登记设备，按最近活跃时间倒序，不含推送 token。\n错误码：1002 未认证或登录态已失效、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "listDevices",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/DeviceListOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "我的设备列表",
+        "tags": [
+          "Device"
+        ]
+      }
+    },
+    "/devices/{deviceId}": {
+      "delete": {
+        "description": "删除设备记录并撤销该设备的全部活跃会话；设备与同名设备会话都不存在时返回 1004。\n错误码：1001 参数错误、1002 未认证或登录态已失效、1004 资源不存在、\n9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "removeDevice",
+        "parameters": [
+          {
+            "description": "客户端上报的设备标识，1-64 个字符。",
+            "example": "web-device-001",
+            "in": "path",
+            "name": "deviceId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/EmptyOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "移除设备",
+        "tags": [
+          "Device"
+        ]
+      }
+    },
+    "/files/multipart/presign": {
+      "post": {
+        "description": "仅 attachment 用途支持，适用于 8MB 以上、200MB 以内的文件。\n服务端初始化 S3 Multipart 上传并一次返回全部分片预签名 URL；客户端逐片 PUT 后调用 complete。\n分片大小 8MB，分片数上限 100；分片签名默认 2 小时（storage.multipart_presign_expire），\n过期后可调用 /files/{fileId}/multipart/parts 刷新；pending 记录 24 小时未完成时由清理任务回收。\n错误码：1001 参数错误（用途/MIME/大小不合法）、1002 未认证或登录态已失效、\n9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "presignMultipartUpload",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultipartPresignRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/MultipartPresignOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "申请分片上传",
+        "tags": [
+          "File"
+        ]
+      }
+    },
+    "/files/presign": {
+      "post": {
+        "description": "校验 purpose / mime / size 后生成服务端对象键与 PUT 预签名 URL，记录以 pending 状态落库。\n客户端按返回的 method、uploadUrl 与 headers 直接上传对象字节，服务端不代理文件内容。\n首版仅支持头像：purpose=avatar，mime 限 jpeg/png/webp，size ≤ 5MB。\npending 记录 24 小时未完成时由清理任务回收。\n错误码：1001 参数错误、1002 未认证或登录态已失效、\n9001 服务内部错误、9002 依赖服务不可用（对象存储未配置时同样返回 9002）。\n",
+        "operationId": "presignFileUpload",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FilePresignRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/FilePresignOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "申请文件直传",
+        "tags": [
+          "File"
+        ]
+      }
+    },
+    "/files/{fileId}": {
+      "delete": {
+        "description": "软删本人文件并尽力删除对象存储对象；重复删除幂等。\n对象删除失败只记录日志，由清理任务按 deleted 状态回收。\n错误码：1001 参数错误、1002 未认证或登录态已失效、\n1004 资源不存在、1005 状态冲突、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "deleteFile",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FileID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/EmptyOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "删除文件",
+        "tags": [
+          "File"
+        ]
+      }
+    },
+    "/files/{fileId}/complete": {
+      "post": {
+        "description": "读取对象存储元数据，校验对象存在、实际大小 ≤ 用途上限且 Content-Type 与申请一致，\n通过后把记录从 pending 置为 ready；重复调用已 ready 的文件幂等返回。\n错误码：1001 参数错误（含对象未上传、大小或类型不符）、1002 未认证或登录态已失效、\n1004 资源不存在、1005 状态冲突、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "completeFileUpload",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FileID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/FileOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "完成上传校验",
+        "tags": [
+          "File"
+        ]
+      }
+    },
+    "/files/{fileId}/multipart/abort": {
+      "post": {
+        "description": "放弃未完成的分片上传并软删记录；已 ready 的文件不允许取消。\n错误码：1001 参数错误、1002 未认证或登录态已失效、\n1004 资源不存在、1005 状态冲突、9001 服务内部错误。\n",
+        "operationId": "abortMultipartUpload",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FileID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/EmptyOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "取消分片上传",
+        "tags": [
+          "File"
+        ]
+      }
+    },
+    "/files/{fileId}/multipart/complete": {
+      "post": {
+        "description": "校验分片数量与顺序后合并分片，并再次 HeadObject 校验总大小与 Content-Type，通过后置为 ready。\n分片 ETag 取每片 PUT 响应头 ETag 原值；重复完成已 ready 的文件幂等返回。\n错误码：1001 参数错误（分片缺失/顺序错误/对象校验失败）、1002 未认证或登录态已失效、\n1004 资源不存在、1005 状态冲突、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "completeMultipartUpload",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FileID"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultipartCompleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/FileOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "完成分片上传",
+        "tags": [
+          "File"
+        ]
+      }
+    },
+    "/files/{fileId}/multipart/parts": {
+      "post": {
+        "description": "为未完成的分片上传重新签发分片 PUT URL；复用原 uploadId 与 objectKey，不产生新记录，\n已上传分片保持不变。partNumbers 为空表示刷新全部分片；分片号必须严格递增且不超过 partCount。\n分片签名有效期由 storage.multipart_presign_expire 控制（默认 2 小时），单文件与 GET 仍为 15 分钟。\n已 ready 的文件返回 1005，他人或已删除文件返回 1004。\n错误码：1001 参数错误（分片号非法/不支持分片）、1002 未认证或登录态已失效、\n1004 资源不存在、1005 状态冲突、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "refreshMultipartPartURLs",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FileID"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultipartPartsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/MultipartPresignOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "刷新分片上传签名",
+        "tags": [
+          "File"
+        ]
+      }
+    },
+    "/files/{fileId}/url": {
+      "get": {
+        "description": "仅本人且状态为 ready 的文件可换取短时预签名 GET URL；他人或已删除文件返回 1004。\n错误码：1001 参数错误（文件未就绪）、1002 未认证或登录态已失效、\n1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "getFileURL",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FileID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/FileURLOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "获取文件访问地址",
+        "tags": [
+          "File"
+        ]
+      }
+    },
+    "/im/retry": {
+      "post": {
+        "description": "重新调用 IM 开通接口，然后返回与 /im/status 相同的结构；已开通的账号重复调用不会重复注册。\n受 IP 维度限流保护（默认 30 次/分钟），超限返回 1029。\n错误码：1002 未认证或登录态已失效、1004 资源不存在、1029 请求过于频繁、\n9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "retryIMProvision",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/IMStatusOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "重试 IM 账号开通",
+        "tags": [
+          "IM"
+        ]
+      }
+    },
+    "/im/status": {
+      "get": {
+        "description": "返回当前账号的 IM 开通状态：0 待开通、1 已开通、2 失败；syncedAt 为最近一次开通成功时间。\n错误码：1002 未认证或登录态已失效、1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "getIMStatus",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/IMStatusOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "查询 IM 开通状态",
+        "tags": [
+          "IM"
+        ]
+      }
+    },
+    "/im/token": {
+      "post": {
+        "description": "请求体为空，平台取自 access token 的 claims（客户端无法改写）。\nIM 未启用或账号尚未开通完成返回 9002；平台非法返回 1001。\n服务端按 (userId, platformId) 缓存 IM token，命中时直接返回；未命中时才向 IM 兑换。\n受 IP 维度限流保护（默认 30 次/分钟），超限返回 1029。\n错误码：1001 参数错误、1002 未认证或登录态已失效、1004 资源不存在、2003 账号已被冻结、\n1029 请求过于频繁、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "exchangeIMToken",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/IMTokenOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "兑换 IM token",
+        "tags": [
+          "IM"
+        ]
+      }
+    },
+    "/profile/batch": {
+      "post": {
+        "description": "按 userId 批量返回公开资料（昵称、头像 key 与公开 avatarUrl），单次最多 100 个；\n不存在的用户直接跳过，不报错。userId 非数字返回 1001。\n错误码：1001 参数错误、1002 未认证或登录态已失效、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "batchProfiles",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchProfilesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ProfileListOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "批量查询公开资料",
+        "tags": [
+          "Profile"
+        ]
+      }
+    },
+    "/profile/me": {
+      "get": {
+        "description": "返回当前用户的完整资料：登录名、昵称、头像 key/URL 与签名。\n`avatarUrl` 是稳定公开地址，客户端直接渲染；为空表示未设置头像。\n错误码：1002 未认证或登录态已失效、1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "getMyProfile",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ProfileOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "查询本人资料",
+        "tags": [
+          "Profile"
+        ]
+      },
+      "put": {
+        "description": "只更新请求体中出现的字段，未出现的字段保持不变；三个字段全部缺省返回 1001。\n昵称不能为空；头像 key 与签名传空字符串表示清空。\n`avatarKey` 传 `/files/presign` 或 complete 返回的 `objectKey`，服务端会解析为公开 `avatarUrl`。\n资料变更与 IM 同步任务在同一事务提交，提交后若 IM 已开通则即时同步 goim；\nIM 未开通时任务退避重试，开通完成后自动补齐。\n错误码：1001 参数错误、1002 未认证或登录态已失效、1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "updateMyProfile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/ProfileOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "更新本人资料",
+        "tags": [
+          "Profile"
+        ]
+      }
+    },
+    "/profile/users/{userId}": {
+      "get": {
+        "description": "返回指定用户的昵称与头像 key；userId 非数字返回 1001，用户不存在返回 1004。\n错误码：1001 参数错误、1002 未认证或登录态已失效、1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "operationId": "getPublicProfile",
+        "parameters": [
+          {
+            "description": "用户 ID（十进制数字字符串）。",
+            "example": "123456789",
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/PublicProfileOK"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "查询指定用户公开资料",
+        "tags": [
+          "Profile"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "description": "本地开发",
+      "url": "http://127.0.0.1:18180/api/v1"
+    },
+    {
+      "description": "联调环境（API 与中间件同机时使用）",
+      "url": "http://192.168.241.128:18180/api/v1"
+    }
+  ],
+  "tags": [
+    {
+      "description": "账号注册、登录、令牌刷新、登出、会话管理与改密",
+      "name": "Account"
+    },
+    {
+      "description": "IM token 兑换、开通状态查询与手动重试",
+      "name": "IM"
+    },
+    {
+      "description": "本人资料读写、公开资料批量查询与单用户查询",
+      "name": "Profile"
+    },
+    {
+      "description": "我的设备列表与移除设备（设备随登录/注册自动登记）",
+      "name": "Device"
+    },
+    {
+      "description": "客户端启动配置、ETag 缓存与配置项元数据",
+      "name": "ClientConfig"
+    },
+    {
+      "description": "文件直传签名、完成校验、访问地址与删除（客户端直传对象存储）",
+      "name": "File"
+    }
+  ]
+}
