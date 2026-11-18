@@ -19,6 +19,9 @@ type OutboxJob struct {
 
 // NewOutboxJob 构造 IM 开通补偿定时任务。
 func NewOutboxJob(worker *Worker, interval time.Duration) *OutboxJob {
+	if interval <= 0 {
+		interval = time.Minute
+	}
 	return &OutboxJob{worker: worker, interval: interval}
 }
 
@@ -27,11 +30,7 @@ func (j *OutboxJob) Name() string { return outboxJobName }
 
 // Spec 返回调度表达式；间隔由配置 im.outbox_scan_interval 决定。
 func (j *OutboxJob) Spec() string {
-	interval := j.interval
-	if interval <= 0 {
-		interval = time.Minute
-	}
-	return "@every " + interval.String()
+	return "@every " + j.interval.String()
 }
 
 // Timeout 返回单次执行超时。
