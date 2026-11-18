@@ -9,6 +9,9 @@ import (
 // ErrIMUserAlreadyExists 表示 IM 侧账号已存在：开通视为成功，但注册不更新既有资料，需补一次同步。
 var ErrIMUserAlreadyExists = errors.New("IM 账号已存在")
 
+// ErrIMUserNotFound 表示 IM 侧没有该用户：注销占位可视为已完成。
+var ErrIMUserNotFound = errors.New("IM 账号不存在")
+
 // IMToken 是 IM 侧签发的用户 token 及到期时间。
 type IMToken struct {
 	Value    string

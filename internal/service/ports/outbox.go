@@ -36,9 +36,10 @@ type OutboxEntry struct {
 // OutboxRepository 是可靠投递任务的持久化端口，与具体业务无关。
 // Enqueue 必须在调用方已开启的事务内执行，保证与业务数据同生共死。
 type OutboxRepository interface {
-	Enqueue(ctx context.Context, userID int64, action, payload string) error
-	// FindPending 返回指定用户与动作最近一条未完成任务；不存在时返回 (nil, nil)。
-	FindPending(ctx context.Context, userID int64, action string) (*OutboxEntry, error)
+	// Enqueue 写入任务并返回任务 ID；调用方用它精确落定本次同步结果。
+	Enqueue(ctx context.Context, userID int64, action, payload string) (int64, error)
+	// GetByID 读取指定任务；不存在时返回 (nil, nil)。
+	GetByID(ctx context.Context, id int64) (*OutboxEntry, error)
 	ListDue(ctx context.Context, limit int) ([]OutboxEntry, error)
 	MarkDone(ctx context.Context, id int64) error
 	MarkRetry(ctx context.Context, id int64, attempts int, lastError string, nextRetryAt time.Time) error

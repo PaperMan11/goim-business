@@ -18,6 +18,8 @@ import (
 	"goim-business/internal/client/goim"
 	"goim-business/internal/config"
 	imjob "goim-business/internal/job/im"
+	"goim-business/internal/pkg/lock"
+	redislock "goim-business/internal/pkg/lock/redis"
 	"goim-business/internal/pkg/ratelimit"
 	"goim-business/internal/pkg/storage/s3"
 	"goim-business/internal/pkg/timex"
@@ -142,6 +144,14 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		return cfg.Storage.PublicObjectURL(objectKey)
 	}
 
+	// 按用户串行化 IM 开通/资料同步/注销占位，避免 outbox 与同步调用交错。
+	imLocker := redislock.NewRedisLocker(
+		rdb,
+		lock.WithDefaultTTL(15*time.Second),
+		lock.WithRetryStrategy(lock.ExponentialBackoff(50*time.Millisecond, 500*time.Millisecond)),
+		lock.WithMaxRetries(5),
+	)
+
 	a.AccountService = account.NewService(
 		a.Users,
 		a.Credentials,
@@ -153,7 +163,10 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		imClient{client: a.IM},
 		a.IMTokenCache,
 		a.Outbox,
-		imjob.NewWorker(a.Users, imClient{client: a.IM}, a.Outbox, cfg.IM.OutboxBatchSize, timex.Now, log.Sugar(), imjob.WithAvatarURL(avatarURL)),
+		imjob.NewWorker(a.Users, imClient{client: a.IM}, a.Outbox, cfg.IM.OutboxBatchSize, timex.Now, log.Sugar(),
+			imjob.WithAvatarURL(avatarURL),
+			imjob.WithUserLock(imLocker, imjob.UserLockKeyPrefix(keyPrefix)),
+		),
 		a.TokenIssuer,
 		account.Config{
 			AccessTTL:              cfg.Auth.AccessTTL,
@@ -225,7 +238,11 @@ func (c imClient) RegisterUser(ctx context.Context, userID, nickname, avatarURL 
 
 // UpdateUserInfo 把昵称与头像同步到 IM。
 func (c imClient) UpdateUserInfo(ctx context.Context, userID, nickname, avatarURL string) error {
-	return c.client.UpdateUserInfo(ctx, goim.UserInfo{UserID: userID, Nickname: nickname, AvatarURL: avatarURL})
+	err := c.client.UpdateUserInfo(ctx, goim.UserInfo{UserID: userID, Nickname: nickname, AvatarURL: avatarURL})
+	if errors.Is(err, goim.ErrUserNotFound) {
+		return ports.ErrIMUserNotFound
+	}
+	return err
 }
 
 // UserToken 为指定用户与平台兑换 IM token。

@@ -25,7 +25,7 @@ func newFakeOutbox() *fakeOutbox {
 	return &fakeOutbox{}
 }
 
-func (f *fakeOutbox) Enqueue(_ context.Context, userID int64, action, payload string) error {
+func (f *fakeOutbox) Enqueue(_ context.Context, userID int64, action, payload string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seq++
@@ -37,19 +37,17 @@ func (f *fakeOutbox) Enqueue(_ context.Context, userID int64, action, payload st
 		Status:      ports.OutboxStatusPending,
 		NextRetryAt: time.Now(),
 	})
-	return nil
+	return f.seq, nil
 }
 
-func (f *fakeOutbox) FindPending(_ context.Context, userID int64, action string) (*ports.OutboxEntry, error) {
+func (f *fakeOutbox) GetByID(_ context.Context, id int64) (*ports.OutboxEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for i := len(f.entries) - 1; i >= 0; i-- {
-		entry := f.entries[i]
-		if entry.UserID != userID || entry.Action != action || entry.Status == ports.OutboxStatusDone {
-			continue
+	for i := range f.entries {
+		if f.entries[i].ID == id {
+			clone := f.entries[i]
+			return &clone, nil
 		}
-		clone := entry
-		return &clone, nil
 	}
 	return nil, nil
 }
@@ -74,7 +72,7 @@ func (f *fakeOutbox) MarkDone(_ context.Context, id int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := range f.entries {
-		if f.entries[i].ID == id {
+		if f.entries[i].ID == id && f.entries[i].Status != ports.OutboxStatusDone {
 			f.entries[i].Status = ports.OutboxStatusDone
 		}
 	}
@@ -85,7 +83,7 @@ func (f *fakeOutbox) MarkRetry(_ context.Context, id int64, attempts int, lastEr
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := range f.entries {
-		if f.entries[i].ID == id {
+		if f.entries[i].ID == id && f.entries[i].Status != ports.OutboxStatusDone {
 			f.entries[i].Status = ports.OutboxStatusFailed
 			f.entries[i].Attempts = attempts
 			f.entries[i].LastError = lastError
@@ -110,6 +108,38 @@ func (f *fakeOutbox) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.entries)
+}
+
+func TestSettleTargetsExactOutboxEntry(t *testing.T) {
+	env := newTestEnv(t, nil)
+	ctx := context.Background()
+
+	id1, err := env.outbox.Enqueue(ctx, 1, ports.OutboxActionProfileSync, "")
+	require.NoError(t, err)
+	id2, err := env.outbox.Enqueue(ctx, 1, ports.OutboxActionProfileSync, "")
+	require.NoError(t, err)
+
+	// 第一次同步失败只应影响自己的任务，不能落定到后入队的任务上。
+	env.imSync.Settle(ctx, id1, errors.New("im 不可用"))
+	e1, err := env.outbox.GetByID(ctx, id1)
+	require.NoError(t, err)
+	require.Equal(t, ports.OutboxStatusFailed, e1.Status)
+	require.Equal(t, 1, e1.Attempts)
+	e2, err := env.outbox.GetByID(ctx, id2)
+	require.NoError(t, err)
+	require.Equal(t, ports.OutboxStatusPending, e2.Status)
+	require.Zero(t, e2.Attempts)
+
+	env.imSync.Settle(ctx, id2, nil)
+	e2, err = env.outbox.GetByID(ctx, id2)
+	require.NoError(t, err)
+	require.Equal(t, ports.OutboxStatusDone, e2.Status)
+
+	// 已完成任务不能被迟到的失败重新打开。
+	require.NoError(t, env.outbox.MarkRetry(ctx, id2, 3, "late failure", time.Now()))
+	e2, err = env.outbox.GetByID(ctx, id2)
+	require.NoError(t, err)
+	require.Equal(t, ports.OutboxStatusDone, e2.Status)
 }
 
 func TestRegisterIMOutboxMarkedDone(t *testing.T) {

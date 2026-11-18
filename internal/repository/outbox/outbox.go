@@ -41,10 +41,10 @@ func (r *Repo) dbFrom(ctx context.Context) *gorm.DB {
 	return repository.DBFromContext(ctx, r.db)
 }
 
-// Enqueue 写入一条待处理任务；复用上下文中的事务，保证与业务数据同事务提交。
-func (r *Repo) Enqueue(ctx context.Context, userID int64, action, payload string) error {
+// Enqueue 写入一条待处理任务并返回任务 ID；复用上下文中的事务，保证与业务数据同事务提交。
+func (r *Repo) Enqueue(ctx context.Context, userID int64, action, payload string) (int64, error) {
 	now := timex.Now()
-	return r.dbFrom(ctx).Create(&model.Outbox{
+	record := &model.Outbox{
 		UserID:      userID,
 		Action:      action,
 		Payload:     payload,
@@ -53,17 +53,17 @@ func (r *Repo) Enqueue(ctx context.Context, userID int64, action, payload string
 		NextRetryAt: now,
 		CreatedAt:   now,
 		UpdatedAt:   now,
-	}).Error
+	}
+	if err := r.dbFrom(ctx).Create(record).Error; err != nil {
+		return 0, err
+	}
+	return record.ID, nil
 }
 
-// FindPending 返回指定用户与动作最近一条未完成任务；不存在时返回 (nil, nil)。
-func (r *Repo) FindPending(ctx context.Context, userID int64, action string) (*ports.OutboxEntry, error) {
+// GetByID 读取指定任务；不存在时返回 (nil, nil)。
+func (r *Repo) GetByID(ctx context.Context, id int64) (*ports.OutboxEntry, error) {
 	var record model.Outbox
-	err := r.dbFrom(ctx).
-		Where("user_id = ? AND action = ? AND status IN ?",
-			userID, action, []int8{ports.OutboxStatusPending, ports.OutboxStatusFailed}).
-		Order("id DESC").
-		First(&record).Error
+	err := r.dbFrom(ctx).Where("id = ?", id).First(&record).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -96,20 +96,20 @@ func (r *Repo) ListDue(ctx context.Context, limit int) ([]ports.OutboxEntry, err
 	return entries, nil
 }
 
-// MarkDone 标记任务已完成。
+// MarkDone 标记任务已完成；仅允许从待处理/失败态迁移，避免并发请求把已完成任务改回其他状态。
 func (r *Repo) MarkDone(ctx context.Context, id int64) error {
 	return r.dbFrom(ctx).Model(&model.Outbox{}).
-		Where("id = ?", id).
+		Where("id = ? AND status IN ?", id, []int8{ports.OutboxStatusPending, ports.OutboxStatusFailed}).
 		Updates(map[string]any{
 			"status":     ports.OutboxStatusDone,
 			"updated_at": timex.Now(),
 		}).Error
 }
 
-// MarkRetry 记录一次失败并安排下次重试时间。
+// MarkRetry 记录一次失败并安排下次重试时间；已完成任务不会被并发失败重新打开。
 func (r *Repo) MarkRetry(ctx context.Context, id int64, attempts int, lastError string, nextRetryAt time.Time) error {
 	return r.dbFrom(ctx).Model(&model.Outbox{}).
-		Where("id = ?", id).
+		Where("id = ? AND status IN ?", id, []int8{ports.OutboxStatusPending, ports.OutboxStatusFailed}).
 		Updates(map[string]any{
 			"status":        ports.OutboxStatusFailed,
 			"attempts":      attempts,

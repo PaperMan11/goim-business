@@ -44,9 +44,10 @@ func (s *Service) Register(ctx context.Context, in types.RegisterRequest) (*type
 	}
 
 	var (
-		sess   *domain.Session
-		pair   TokenPair
-		kicked []int64
+		sess        *domain.Session
+		pair        TokenPair
+		kicked      []int64
+		provisionID int64
 	)
 	err = s.tx.WithTx(ctx, func(ctx context.Context) error {
 		if err := s.users.Create(ctx, user); err != nil {
@@ -63,7 +64,8 @@ func (s *Service) Register(ctx context.Context, in types.RegisterRequest) (*type
 			return s.dbErr("注册写入凭证", err)
 		}
 		// 与用户、凭证、会话同事务写入：账号创建成功即保证补偿任务不会丢。
-		if err := s.enqueueIMOutbox(ctx, user.ID, ports.OutboxActionProvisionIM); err != nil {
+		provisionID, err = s.enqueueIMOutbox(ctx, user.ID, ports.OutboxActionProvisionIM)
+		if err != nil {
 			return s.dbErr("注册写入 IM outbox", err)
 		}
 		var createErr error
@@ -90,7 +92,7 @@ func (s *Service) Register(ctx context.Context, in types.RegisterRequest) (*type
 	if s.im != nil && s.im.Enabled() {
 		settleCtx := context.WithoutCancel(ctx)
 		provisionErr := s.provisionIM(settleCtx, user)
-		s.imSync.Settle(settleCtx, user.ID, ports.OutboxActionProvisionIM, provisionErr)
+		s.imSync.Settle(settleCtx, provisionID, provisionErr)
 	}
 	return s.authResp(user, pair), nil
 }

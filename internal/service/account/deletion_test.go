@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -70,6 +71,47 @@ func TestDeleteAccountMarksDeletingAndPurgesIM(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, again.PurgeAt.Equal(result.PurgeAt))
 	require.Equal(t, count, env.outbox.count())
+}
+
+func TestDeleteAccountPurgesWhenIMStatusFailed(t *testing.T) {
+	env := newTestEnv(t, nil)
+	env.provisioner.setEnabled(true)
+	// 注册时 IM 返回失败，本地状态停在 Failed，但 IM 侧可能已创建投影。
+	env.provisioner.setErr(errors.New("im 响应超时"))
+	ctx := context.Background()
+
+	resp, err := env.svc.Register(ctx, types.RegisterRequest{
+		LoginName: "alice", Password: testPassword, DeviceID: testDevice, Platform: testPlatform,
+	})
+	require.NoError(t, err)
+	userID := idOf(t, resp.User.UserID)
+	require.Equal(t, domain.IMStatusFailed, mustUser(t, env, userID).IMStatus)
+
+	env.provisioner.setErr(nil)
+	_, err = env.svc.DeleteAccount(ctx, userID)
+	require.NoError(t, err)
+
+	stored := mustUser(t, env, userID)
+	require.Equal(t, domain.IMStatusPurged, stored.IMStatus)
+	_, _, nickname, avatar := env.provisioner.lastUpdate()
+	require.Equal(t, "已注销用户", nickname)
+	require.Empty(t, avatar)
+}
+
+func TestPurgeTreatsMissingIMUserAsSuccess(t *testing.T) {
+	env := newTestEnv(t, nil)
+	env.provisioner.setEnabled(true)
+	ctx := context.Background()
+
+	resp, err := env.svc.Register(ctx, types.RegisterRequest{
+		LoginName: "alice", Password: testPassword, DeviceID: testDevice, Platform: testPlatform,
+	})
+	require.NoError(t, err)
+	userID := idOf(t, resp.User.UserID)
+
+	env.provisioner.setUpdateErr(ports.ErrIMUserNotFound)
+	require.NoError(t, env.imSync.Purge(ctx, mustUser(t, env, userID)))
+	require.Equal(t, domain.IMStatusPurged, mustUser(t, env, userID).IMStatus)
 }
 
 func TestDeleteAccountWithoutIMSkipsOutbox(t *testing.T) {

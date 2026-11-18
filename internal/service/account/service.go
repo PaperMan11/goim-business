@@ -32,9 +32,10 @@ type Config struct {
 type IMProvisioner interface {
 	Provision(ctx context.Context, user *domain.User) error
 	SyncProfile(ctx context.Context, user *domain.User) error
-	// Purge 把 IM 侧资料置为注销占位；IM 未创建投影时由 outbox 直接完成。
+	// Purge 把 IM 侧资料置为注销占位；IM 侧没有投影时同样视为成功。
 	Purge(ctx context.Context, user *domain.User) error
-	Settle(ctx context.Context, userID int64, action string, cause error)
+	// Settle 按任务 ID 落定本次同步结果，避免并发请求交叉落定。
+	Settle(ctx context.Context, entryID int64, cause error)
 }
 
 // Service 是账号域服务。

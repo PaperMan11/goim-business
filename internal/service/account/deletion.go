@@ -47,6 +47,7 @@ func (s *Service) DeleteAccount(ctx context.Context, userID int64) (*types.Delet
 		purgeAt = *user.PurgeAt
 	}
 
+	var purgeEntryID int64
 	if !alreadyDeleting {
 		if err := s.tx.WithTx(ctx, func(ctx context.Context) error {
 			ok, err := s.users.MarkDeleting(ctx, user.ID, purgeAt, now)
@@ -57,7 +58,8 @@ func (s *Service) DeleteAccount(ctx context.Context, userID int64) (*types.Delet
 				return errcode.ErrConflict.WithMessage("账号状态已变化，请刷新后重试")
 			}
 			// 与注销状态同事务写入：只要事务提交，IM 注销同步就不会丢。
-			if err := s.enqueueIMOutboxPayload(ctx, user.ID, ports.OutboxActionPurgeIM, "{}"); err != nil {
+			purgeEntryID, err = s.enqueueIMOutboxPayload(ctx, user.ID, ports.OutboxActionPurgeIM, "{}")
+			if err != nil {
 				return s.dbErr("注销写入 IM outbox", err)
 			}
 			return nil
@@ -94,18 +96,15 @@ func (s *Service) DeleteAccount(ctx context.Context, userID int64) (*types.Delet
 	}
 
 	// 尽力即时同步 IM；失败由 outbox 补偿，不影响注销结果。
-	// 从未成功开通（pending/failed）时 IM 侧没有投影，直接落定 outbox，避免无意义调用失败重试。
+	// 不按 im_status 提前跳过：开通响应丢失时本地可能是 pending/failed，但 IM 侧已有投影；
+	// Purge 对“IM 用户不存在”也按成功处理，因此始终尝试一次。
 	if !alreadyDeleting && s.im != nil && s.im.Enabled() {
 		syncCtx := context.WithoutCancel(ctx)
 		user.Status = domain.StatusDeleting
 		user.PurgeAt = &purgeAt
 		user.UpdatedAt = now
-		if user.IMStatus == domain.IMStatusReady {
-			purgeErr := s.imSync.Purge(syncCtx, user)
-			s.imSync.Settle(syncCtx, user.ID, ports.OutboxActionPurgeIM, purgeErr)
-		} else {
-			s.imSync.Settle(syncCtx, user.ID, ports.OutboxActionPurgeIM, nil)
-		}
+		purgeErr := s.imSync.Purge(syncCtx, user)
+		s.imSync.Settle(syncCtx, purgeEntryID, purgeErr)
 	}
 
 	return &types.DeleteAccountResp{PurgeAt: purgeAt}, nil

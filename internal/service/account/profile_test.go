@@ -184,7 +184,8 @@ func TestProfileOutboxWaitsForIMReady(t *testing.T) {
 	userID := idOf(t, resp.User.UserID)
 
 	env.provisioner.setEnabled(true)
-	require.NoError(t, env.outbox.Enqueue(ctx, userID, ports.OutboxActionProfileSync, ""))
+	_, err = env.outbox.Enqueue(ctx, userID, ports.OutboxActionProfileSync, "")
+	require.NoError(t, err)
 
 	// IM 账号尚未开通：资料同步应进入重试而不是直接调用 goim。
 	require.Equal(t, 1, env.imSync.RunDue(ctx))

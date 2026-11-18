@@ -97,6 +97,14 @@ func NewCronApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*Cron
 	users := accountrepo.NewUserRepo(db)
 	files := filerepo.New(db)
 
+	// IM 操作用独立的短 TTL 锁：与 cron 任务锁分开，避免不同任务互相等待。
+	imLocker := redislock.NewRedisLocker(
+		rdb,
+		lock.WithDefaultTTL(15*time.Second),
+		lock.WithRetryStrategy(lock.ExponentialBackoff(50*time.Millisecond, 500*time.Millisecond)),
+		lock.WithMaxRetries(5),
+	)
+
 	return &CronApp{
 		Config:  cfg,
 		Logger:  log,
@@ -107,7 +115,9 @@ func NewCronApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*Cron
 		Worker: imjob.NewWorker(users, imClient{client: im}, outboxrepo.New(db), cfg.IM.OutboxBatchSize, timex.Now, log.Sugar(),
 			imjob.WithAvatarURL(func(objectKey string) string {
 				return cfg.Storage.PublicObjectURL(objectKey)
-			})),
+			}),
+			imjob.WithUserLock(imLocker, imjob.UserLockKeyPrefix(fmt.Sprintf("%s:%s", cfg.Redis.KeyPrefix, cfg.Env))),
+		),
 		FileCleaner: filejob.NewCleaner(files, storageClient, cfg.Storage.CleanupBatchSize, timex.Now, log.Sugar()),
 		AccountPurger: accountjob.NewPurger(
 			users,

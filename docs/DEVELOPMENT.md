@@ -1427,7 +1427,7 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 1. `DELETE /api/v1/account`（Bearer 鉴权）：
    - 事务内 `MarkDeleting(userID, purgeAt)`：`WHERE status=1` 置 `3` 并写 `purge_at = now + deletion_cooldown`；条件更新失败返回冲突，重复注销幂等。同一事务 `Enqueue(userID, "purge_im_user", "{}")`。
    - 提交后：`RevokeAll(userID, now, 0)` 逐个 `Deactivate(sid)`，删除 IM token 缓存（覆盖全部平台编码含 HarmonyOS 11，直接 DEL，不使用 SCAN），返回 `{ "purgeAt": "..." }`。
-   - 尽力即时同步：`imSync.Purge(ctx, user)`，成功/失败交由 `Settle` 落定 outbox；失败不影响接口成功。
+   - 尽力即时同步：`imSync.Purge(ctx, user)`（不按 `im_status` 跳过，IM 用户不存在视为成功），成功/失败按入队返回的任务 ID `Settle`；失败不影响接口成功。
 2. 冷却期内：`CanAuthenticate` 已对 `3/4` 拒绝；公开资料查询按 `status IN (3,4)` 过滤，避免已注销账号继续被他人看到。
    - 并发安全：登录/刷新在事务内用 `SELECT ... FOR UPDATE` 复核用户状态，与注销的 `MarkDeleting` 行锁串行化；会话激活后再次复核是否已被撤销，命中则回滚活跃标记并拒绝本次登录。
    - 资料更新仅允许 `status=1` 的账号；IM 同步前重新读取当前用户，账号进入注销后不再覆盖占位资料。
@@ -1440,7 +1440,7 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 #### IM 同步语义
 
 - 新增 outbox action `purge_im_user`，由 `internal/job/im` 的 worker 处理：
-  - IM 未启用或 `im_status` 不是 `1(Ready)`：直接 `MarkDone`（IM 侧本来没有投影或已完成注销，避免无意义重试）。
+  - IM 未启用：`RunDue` 直接跳过；`im_status=3(已注销)` 直接 `MarkDone`，其余状态一律尝试占位同步（本地 pending/failed 不能证明 IM 侧没有投影）。
   - 当前固定使用 **placeholder 模式**：调用 `UpdateUserInfo` 写入占位资料（昵称「已注销用户」、`faceURL` 空），成功后把 `im_status` 置 `3` 并 `MarkDone`。该方式只依赖现有 `update_user_info` 接口，幂等可重放。
   - 真删（goim 提供删除接口后）再评估新增 `delete` 模式；当前不引入 `im.purge_mode` 配置，避免为未就绪接口预埋开关。
   - 失败走既有指数退避，`last_error` 落 `outbox_events`，可在 `/im/status` 与日志中观测。
@@ -1465,7 +1465,10 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 
 - `MarkDeleting` / `MarkPurged` / `MarkObjectDeleted` 全部使用条件更新，返回值决定是否继续，天然支持多实例与重复调用。
 - 注销与 complete 竞争：`MarkReady` 仅接受 `status=0`，注销流程不触碰 pending 记录的 `ready` 转换；对象删除幂等，S3 删除不存在的 key 视为成功。
-- outbox 每个用户每类动作只有一条未完成任务（现有 `FindPending` 语义），注销事务内的条件更新保证不会重复入队。
+- 开通/资料同步/注销占位统一经 Worker 的用户级 Redis 锁串行化，避免 outbox 补偿与同步调用交错写 IM；锁键为 `<redis.key_prefix>:<env>:lock:im:user:<userID>`，`lock` 段与其他业务键隔离。
+- `Settle` 按 `Enqueue` 返回的任务 ID 落定；`MarkDone`/`MarkRetry` 只允许 pending/failed 迁移，已完成任务不会被迟到的失败重新打开。
+- 注销占位不按 `im_status` 提前跳过：本地 pending/failed 也可能是“注册成功但响应丢失”；`Purge` 把 IM 返回的 1101（用户不存在）视为成功。
+- 开通/资料同步在锁内重读用户状态，已注销则跳过；`Provision` 回写 Ready 失败会返回错误，交由 outbox 重试而不是长期停留在 pending/failed。
 
 #### 配置
 

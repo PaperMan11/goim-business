@@ -5,13 +5,20 @@ import (
 	"errors"
 )
 
-// codeUserAlreadyExists 是 goim 对“用户已注册”返回的业务码。
-const codeUserAlreadyExists = 1102
+const (
+	// codeUserAlreadyExists 是 goim 对“用户已注册”返回的业务码。
+	codeUserAlreadyExists = 1102
+	// codeUserNotFound 是 goim 对“用户不存在或未注册”返回的业务码。
+	codeUserNotFound = 1101
+)
 
 // ErrUserAlreadyExists 表示 IM 侧已存在该用户。
 // 该场景通常发生在“IM 已创建成功但响应丢失”后的重试，或账号由其他系统预建；
 // 注册不会更新既有资料，调用方应视为开通成功并按需补一次资料同步。
 var ErrUserAlreadyExists = errors.New("goim 用户已存在")
+
+// ErrUserNotFound 表示 IM 侧没有该用户；注销占位可视为已完成。
+var ErrUserNotFound = errors.New("goim 用户不存在")
 
 // UserInfo 是需要同步到 IM 的用户资料。
 type UserInfo struct {
@@ -65,11 +72,16 @@ func (c *Client) UpdateUserInfo(ctx context.Context, u UserInfo) error {
 	if !c.Enabled() {
 		return ErrDisabled
 	}
-	return c.doWithAdminToken(ctx, methodUpdateUserInfo, "/user/update_user_info", updateUserInfoRequest{
+	err := c.doWithAdminToken(ctx, methodUpdateUserInfo, "/user/update_user_info", updateUserInfoRequest{
 		UserInfo: registerUser{
 			UserID:   u.UserID,
 			Nickname: u.Nickname,
 			FaceURL:  u.AvatarURL,
 		},
 	}, nil)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Code == codeUserNotFound {
+		return ErrUserNotFound
+	}
+	return err
 }

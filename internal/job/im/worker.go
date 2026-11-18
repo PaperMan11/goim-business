@@ -5,11 +5,13 @@ package im
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	domain "goim-business/internal/domain/account"
 	"goim-business/internal/pkg/convert"
+	"goim-business/internal/pkg/lock"
 	"goim-business/internal/pkg/logger"
 	"goim-business/internal/pkg/text"
 	"goim-business/internal/service/ports"
@@ -32,13 +34,15 @@ const (
 // Worker 处理 IM 账号开通与 outbox 补偿，只依赖用户仓储、IM 客户端与 outbox 仓储。
 // API 通过账号服务注入使用；cron 进程可独立构造，无需装配会话、令牌、限流等组件。
 type Worker struct {
-	users     domain.UserRepository
-	im        ports.IMClient
-	outbox    ports.OutboxRepository
-	batchSize int
-	now       func() time.Time
-	avatarURL func(string) string
-	log       logger.Logger
+	users      domain.UserRepository
+	im         ports.IMClient
+	outbox     ports.OutboxRepository
+	batchSize  int
+	now        func() time.Time
+	avatarURL  func(string) string
+	locker     lock.Locker
+	lockPrefix string
+	log        logger.Logger
 }
 
 // Option 是 Worker 的可选配置。
@@ -48,6 +52,21 @@ type Option func(*Worker)
 func WithAvatarURL(resolver func(objectKey string) string) Option {
 	return func(w *Worker) {
 		w.avatarURL = resolver
+	}
+}
+
+// UserLockKeyPrefix 返回 IM 用户锁的完整 Redis 键前缀。
+// API 与 cron 必须使用同一前缀，才能对同一用户跨进程串行；"lock" 段用于与业务数据键隔离。
+func UserLockKeyPrefix(base string) string {
+	return base + ":lock:im:user"
+}
+
+// WithUserLock 注入按用户维度的分布式锁，串行化开通、资料同步与注销占位三类 IM 操作。
+// prefix 由 UserLockKeyPrefix 生成，最终键为 "<prefix>:<userID>"。
+func WithUserLock(locker lock.Locker, prefix string) Option {
+	return func(w *Worker) {
+		w.locker = locker
+		w.lockPrefix = prefix
 	}
 }
 
@@ -85,25 +104,40 @@ func NewWorker(
 func (w *Worker) Provision(ctx context.Context, user *domain.User) error {
 	// 客户端断开不应导致已发出的开通请求被误判失败，回写状态同样需要继续执行。
 	provisionCtx := context.WithoutCancel(ctx)
-	userID := convert.ToString(user.ID)
+	return w.withUserLock(provisionCtx, user.ID, func(lockCtx context.Context) error {
+		return w.provision(lockCtx, user.ID)
+	})
+}
 
-	registerErr := w.im.RegisterUser(provisionCtx, userID, user.Nickname, w.resolveAvatarURL(user.AvatarKey))
+func (w *Worker) provision(ctx context.Context, userID int64) error {
+	// 锁内重读：若注销已提交，直接跳过，避免为已注销账号创建 IM 投影。
+	current, err := w.users.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if current.Status != domain.StatusNormal {
+		return nil
+	}
+
+	registerErr := w.im.RegisterUser(ctx, convert.ToString(current.ID), current.Nickname, w.resolveAvatarURL(current.AvatarKey))
 	// IM 侧账号已存在时注册不会更新既有资料（例如账号由其他系统预建或上次响应丢失），
 	// 需补一次全量资料同步；同步失败按开通失败处理，交给 outbox 重试。
 	if errors.Is(registerErr, ports.ErrIMUserAlreadyExists) {
-		registerErr = w.SyncProfile(provisionCtx, user)
+		registerErr = w.syncProfile(ctx, current.ID)
 	}
 	if registerErr != nil {
-		w.log.Warnf("IM 开通失败: user_id=%d, err=%v", user.ID, registerErr)
-		if writeErr := w.users.UpdateIMStatus(provisionCtx, user.ID, domain.IMStatusFailed, nil, w.now()); writeErr != nil {
-			w.log.Errorf("回写 IM 开通状态失败: user_id=%d, status=%d, err=%v", user.ID, domain.IMStatusFailed, writeErr)
+		w.log.Warnf("IM 开通失败: user_id=%d, err=%v", current.ID, registerErr)
+		if writeErr := w.users.UpdateIMStatus(ctx, current.ID, domain.IMStatusFailed, nil, w.now()); writeErr != nil {
+			w.log.Errorf("回写 IM 开通状态失败: user_id=%d, status=%d, err=%v", current.ID, domain.IMStatusFailed, writeErr)
 		}
 		return registerErr
 	}
 
 	syncedAt := w.now()
-	if err := w.users.UpdateIMStatus(provisionCtx, user.ID, domain.IMStatusReady, &syncedAt, syncedAt); err != nil {
-		w.log.Errorf("回写 IM 开通状态失败: user_id=%d, status=%d, err=%v", user.ID, domain.IMStatusReady, err)
+	if err := w.users.UpdateIMStatus(ctx, current.ID, domain.IMStatusReady, &syncedAt, syncedAt); err != nil {
+		// 状态回写失败必须让 outbox 重试，否则 IM 已开通但本地长期停留在 pending/failed。
+		w.log.Errorf("回写 IM 开通状态失败: user_id=%d, status=%d, err=%v", current.ID, domain.IMStatusReady, err)
+		return err
 	}
 	return nil
 }
@@ -112,38 +146,60 @@ func (w *Worker) Provision(ctx context.Context, user *domain.User) error {
 func (w *Worker) SyncProfile(ctx context.Context, user *domain.User) error {
 	// 客户端断开不应导致已发出的同步请求被误判失败。
 	syncCtx := context.WithoutCancel(ctx)
+	return w.withUserLock(syncCtx, user.ID, func(lockCtx context.Context) error {
+		return w.syncProfile(lockCtx, user.ID)
+	})
+}
+
+func (w *Worker) syncProfile(ctx context.Context, userID int64) error {
 	// 调用 IM 前读取当前资料：避免用任务入队时的旧快照覆盖注销占位资料，
 	// 账号进入注销中/已注销后直接跳过。
-	current, err := w.users.GetByID(syncCtx, user.ID)
+	current, err := w.users.GetByID(ctx, userID)
 	if err != nil {
 		return err
 	}
 	if current.Status != domain.StatusNormal {
 		return nil
 	}
-	user = current
-	if err := w.im.UpdateUserInfo(syncCtx, convert.ToString(user.ID), user.Nickname, w.resolveAvatarURL(user.AvatarKey)); err != nil {
-		w.log.Warnf("IM 资料同步失败: user_id=%d, err=%v", user.ID, err)
+	if err := w.im.UpdateUserInfo(ctx, convert.ToString(current.ID), current.Nickname, w.resolveAvatarURL(current.AvatarKey)); err != nil {
+		w.log.Warnf("IM 资料同步失败: user_id=%d, err=%v", current.ID, err)
 		return err
 	}
 	return nil
 }
 
 // Purge 把 IM 侧资料改为注销占位（昵称「已注销用户」、头像为空），并把 im_status 置为已注销。
-// 该方式只依赖 update_user_info，幂等可重放；失败返回错误交由 outbox 退避重试。
+// 该方式只依赖 update_user_info，幂等可重放；IM 侧不存在该用户时同样视为成功。
 func (w *Worker) Purge(ctx context.Context, user *domain.User) error {
 	purgeCtx := context.WithoutCancel(ctx)
-	userID := convert.ToString(user.ID)
-	if err := w.im.UpdateUserInfo(purgeCtx, userID, purgedNickname, ""); err != nil {
-		w.log.Warnf("IM 注销同步失败: user_id=%d, err=%v", user.ID, err)
+	return w.withUserLock(purgeCtx, user.ID, func(lockCtx context.Context) error {
+		return w.purge(lockCtx, user.ID)
+	})
+}
+
+func (w *Worker) purge(ctx context.Context, userID int64) error {
+	err := w.im.UpdateUserInfo(ctx, convert.ToString(userID), purgedNickname, "")
+	if err != nil && !errors.Is(err, ports.ErrIMUserNotFound) {
+		w.log.Warnf("IM 注销同步失败: user_id=%d, err=%v", userID, err)
 		return err
 	}
 	// 状态回写失败时返回错误，避免 outbox 提前完成导致后续资料同步覆盖占位资料。
-	if err := w.users.UpdateIMStatus(purgeCtx, user.ID, domain.IMStatusPurged, nil, w.now()); err != nil {
-		w.log.Errorf("回写 IM 注销状态失败: user_id=%d, err=%v", user.ID, err)
+	if err := w.users.UpdateIMStatus(ctx, userID, domain.IMStatusPurged, nil, w.now()); err != nil {
+		w.log.Errorf("回写 IM 注销状态失败: user_id=%d, err=%v", userID, err)
 		return err
 	}
 	return nil
+}
+
+// withUserLock 按用户串行化 IM 操作；未注入锁时直接执行，便于测试与单机部署。
+func (w *Worker) withUserLock(ctx context.Context, userID int64, fn func(context.Context) error) error {
+	if w.locker == nil {
+		return fn(ctx)
+	}
+	key := fmt.Sprintf("%s:%d", w.lockPrefix, userID)
+	return w.locker.ExecWithLock(ctx, key, func() error {
+		return fn(ctx)
+	})
 }
 
 // resolveAvatarURL 把头像 key 解析为可直接访问的稳定 URL；已是 http(s) 地址时原样返回。
@@ -161,23 +217,23 @@ func (w *Worker) resolveAvatarURL(key string) string {
 	return w.avatarURL(key)
 }
 
-// Settle 在同步调用结束后落定指定类型唯一一条 outbox 任务：
-// 成功标记完成，失败按退避策略安排重试。异步补偿由 RunDue 接管。
-func (w *Worker) Settle(ctx context.Context, userID int64, action string, cause error) {
-	if w.outbox == nil {
+// Settle 按任务 ID 落定本次同步结果：成功标记完成，失败按退避策略安排重试。
+// 使用任务 ID 而非 userID+action，避免并发请求把结果落到另一次同步的任务上。
+func (w *Worker) Settle(ctx context.Context, entryID int64, cause error) {
+	if w.outbox == nil || entryID == 0 {
 		return
 	}
-	entry, err := w.outbox.FindPending(ctx, userID, action)
+	entry, err := w.outbox.GetByID(ctx, entryID)
 	if err != nil {
-		w.log.Errorf("查询 IM outbox 失败: user_id=%d, action=%s, err=%v", userID, action, err)
+		w.log.Errorf("查询 IM outbox 失败: id=%d, err=%v", entryID, err)
 		return
 	}
-	if entry == nil {
+	if entry == nil || entry.Status == ports.OutboxStatusDone {
 		return
 	}
 	if cause == nil {
 		if err := w.outbox.MarkDone(ctx, entry.ID); err != nil {
-			w.log.Errorf("标记 IM outbox 完成失败: id=%d, user_id=%d, err=%v", entry.ID, userID, err)
+			w.log.Errorf("标记 IM outbox 完成失败: id=%d, user_id=%d, err=%v", entry.ID, entry.UserID, err)
 		}
 		return
 	}
@@ -291,15 +347,13 @@ func (w *Worker) processPurge(ctx context.Context, entry ports.OutboxEntry) {
 		w.retry(writeCtx, entry, err)
 		return
 	}
-	// IM 账号从未开通或已完成注销占位：没有需要同步的投影，直接完成任务。
-	if user.IMStatus != domain.IMStatusReady && user.IMStatus != domain.IMStatusPurged {
-		w.markDone(writeCtx, entry)
-		return
-	}
+	// 已完成注销占位：无需重复调用。
 	if user.IMStatus == domain.IMStatusPurged {
 		w.markDone(writeCtx, entry)
 		return
 	}
+	// 即使本地是 pending/failed，也可能存在“注册成功但响应丢失”的 IM 投影，必须尝试占位；
+	// Purge 会把 IM 返回的用户不存在视为成功。
 	if err := w.Purge(writeCtx, user); err != nil {
 		w.retry(writeCtx, entry, err)
 		return

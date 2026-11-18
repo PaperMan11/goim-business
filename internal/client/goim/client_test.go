@@ -272,6 +272,26 @@ func TestRegisterUserIdempotentWhenUserAlreadyExists(t *testing.T) {
 	require.Equal(t, 1, registerCalls)
 }
 
+func TestUpdateUserInfoMapsUserNotFound(t *testing.T) {
+	rec := new(callRecord)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case apiPrefix + "/auth/get_admin_token":
+			rec.recordAdmin()
+			writeResponse(w, 0, "ok", map[string]any{"token": "admin-token", "expireTimeSeconds": 300})
+		case apiPrefix + "/user/update_user_info":
+			writeResponse(w, 1101, "用户不存在", nil)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(Config{BaseURL: srv.URL, AdminUserID: "admin", AdminSecret: "secret"})
+	err := c.UpdateUserInfo(context.Background(), UserInfo{UserID: "1", Nickname: "已注销用户"})
+	require.ErrorIs(t, err, ErrUserNotFound)
+}
+
 func TestRegisterUserRetriesOnceAfterPermissionError(t *testing.T) {
 	rec := new(callRecord)
 	var lastToken atomic.Value
