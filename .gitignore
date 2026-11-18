@@ -8,6 +8,7 @@ etc/*.local.yaml
 # 构建产物
 /bin/
 /dist/
+/logs/
 /tmp/
 *.exe
 *.dll

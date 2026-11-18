@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -28,8 +29,12 @@ func main() {
 }
 
 func run() error {
-	env := envOr("GOIM_BIZ_ENV", "dev")
-	cfg, err := config.Load(os.Getenv("GOIM_BIZ_CONFIG_DIR"), env)
+	configPath := "etc/dev.yaml"
+	flag.StringVar(&configPath, "c", configPath, "配置文件路径（YAML），env 由文件内 env 字段声明")
+	flag.StringVar(&configPath, "config", configPath, "配置文件路径，等同 -c")
+	flag.Parse()
+
+	cfg, err := config.LoadFile(configPath)
 	if err != nil {
 		return err
 	}
@@ -70,11 +75,4 @@ func run() error {
 	log.Info("cron 启动", zap.String("lock_prefix", a.LockPrefix))
 	scheduler.Run(ctx)
 	return nil
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

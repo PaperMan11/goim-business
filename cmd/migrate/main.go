@@ -3,6 +3,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -23,15 +24,28 @@ func main() {
 }
 
 func run() error {
-	if len(os.Args) < 2 {
-		return fmt.Errorf("用法: migrate up|down|version")
+	configPath := "etc/dev.yaml"
+	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
+	fs.StringVar(&configPath, "c", configPath, "配置文件路径（YAML），env 由文件内 env 字段声明")
+	fs.StringVar(&configPath, "config", configPath, "配置文件路径，等同 -c")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "用法: migrate [-c 配置文件] up|down|version\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
 	}
 
-	env := os.Getenv("GOIM_BIZ_ENV")
-	if env == "" {
-		env = "dev"
+	args := fs.Args()
+	if len(args) < 1 {
+		fs.Usage()
+		return fmt.Errorf("缺少子命令")
 	}
-	cfg, err := config.Load(os.Getenv("GOIM_BIZ_CONFIG_DIR"), env)
+
+	cfg, err := config.LoadFile(configPath)
 	if err != nil {
 		return err
 	}
@@ -50,7 +64,7 @@ func run() error {
 		}
 	}()
 
-	switch os.Args[1] {
+	switch args[0] {
 	case "up":
 		if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 			return err
@@ -68,7 +82,7 @@ func run() error {
 		}
 		fmt.Printf("当前版本: %d, dirty: %v\n", v, dirty)
 	default:
-		return fmt.Errorf("未知命令 %q，用法: migrate up|down|version", os.Args[1])
+		return fmt.Errorf("未知命令 %q，用法: migrate [-c 配置文件] up|down|version", args[0])
 	}
 	return nil
 }

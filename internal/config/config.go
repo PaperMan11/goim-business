@@ -1,10 +1,12 @@
-// Package config 负责加载分层配置（base.yaml → {env}.yaml → 环境变量）并做启动期强校验。
+// Package config 负责加载配置文件（同目录 base.yaml 为基线，指定文件覆盖）并叠加环境变量，最后做启动期强校验。
 package config
 
 import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -140,34 +142,42 @@ func (c StorageConfig) PublicObjectURL(objectKey string) string {
 	return strings.TrimRight(base, "/") + "/" + c.Bucket + "/" + key
 }
 
-// Load 按 env 加载配置：base.yaml → {env}.yaml → GOIM_BIZ_* 环境变量。
-func Load(dir, env string) (*Config, error) {
-	if dir == "" {
-		dir = "etc"
-	}
-	if env == "" {
-		env = "dev"
+// LoadFile 从指定配置文件加载：同目录的 base.yaml 作为基线，指定文件覆盖其上；
+// env 由配置文件中的 env 字段声明，未声明时按 dev 处理。
+func LoadFile(path string) (*Config, error) {
+	if path == "" {
+		path = filepath.Join("etc", "dev.yaml")
 	}
 
 	v := viper.New()
 	v.SetConfigType("yaml")
-	v.AddConfigPath(dir)
 
-	v.SetConfigName("base")
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("读取基础配置失败: %w", err)
-	}
-
-	if env != "base" {
-		v.SetConfigName(env)
-		if err := v.MergeInConfig(); err != nil {
-			var notFound viper.ConfigFileNotFoundError
-			if !asConfigNotFound(err, &notFound) {
-				return nil, fmt.Errorf("读取环境配置 %s 失败: %w", env, err)
-			}
+	basePath := filepath.Join(filepath.Dir(path), "base.yaml")
+	if _, err := os.Stat(basePath); err == nil {
+		v.SetConfigFile(basePath)
+		if err := v.ReadInConfig(); err != nil {
+			return nil, fmt.Errorf("读取基础配置失败: %w", err)
 		}
 	}
 
+	v.SetConfigFile(path)
+	if err := v.MergeInConfig(); err != nil {
+		return nil, fmt.Errorf("读取配置文件 %s 失败: %w", path, err)
+	}
+	return finish(v, envOf(v))
+}
+
+// envOf 读取配置中的 env 字段，未声明时回退为 dev。
+func envOf(v *viper.Viper) string {
+	env := strings.TrimSpace(v.GetString("env"))
+	if env == "" {
+		env = "dev"
+	}
+	return env
+}
+
+// finish 注入环境变量覆盖、解析并校验配置。
+func finish(v *viper.Viper, env string) (*Config, error) {
 	v.SetEnvPrefix(envPrefix)
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
 	v.AutomaticEnv()
@@ -178,19 +188,10 @@ func Load(dir, env string) (*Config, error) {
 	}
 	cfg.Env = env
 	cfg.Server.TrustedProxies = normalizeProxyList(cfg.Server.TrustedProxies)
-
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
-}
-
-func asConfigNotFound(err error, target *viper.ConfigFileNotFoundError) bool {
-	if e, ok := err.(viper.ConfigFileNotFoundError); ok {
-		*target = e
-		return true
-	}
-	return false
 }
 
 // normalizeProxyList 兼容环境变量注入：GOIM_BIZ_SERVER__TRUSTED_PROXIES 只能给字符串，

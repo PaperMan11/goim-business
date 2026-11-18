@@ -293,7 +293,7 @@ cors:
 
 `etc/dev.yaml` 提供本地 DSN、开发 JWT secret 与 `http://localhost:5173` 白名单；`etc/prod.yaml` 只覆盖日志级别、把 `dsn`/`redis.addr` 置空并清空白名单，密钥必须由环境变量注入。
 
-`.env.example` 列出 `GOIM_BIZ_ENV`、`GOIM_BIZ_CONFIG_DIR`、`GOIM_BIZ_MYSQL__DSN`、`GOIM_BIZ_REDIS__ADDR`、`GOIM_BIZ_REDIS__PASSWORD`、`GOIM_BIZ_AUTH__JWT_SECRET`、`GOIM_BIZ_AUTH__COOKIE_SECURE`。其中 `COOKIE_SECURE` 预留给后续 HttpOnly Cookie 方案，当前配置结构体尚未消费。
+`.env.example` 只列出密钥类覆盖项（`GOIM_BIZ_MYSQL__DSN`、`GOIM_BIZ_REDIS__ADDR`、`GOIM_BIZ_REDIS__PASSWORD`、`GOIM_BIZ_AUTH__JWT_SECRET`、`GOIM_BIZ_AUTH__COOKIE_SECURE`）。配置文件位置由启动参数 `-c`（或 `-config`）指定，`env` 取自文件内的 `env` 字段，不再使用 `GOIM_BIZ_ENV` / `GOIM_BIZ_CONFIG_DIR`。其中 `COOKIE_SECURE` 预留给后续 HttpOnly Cookie 方案，当前配置结构体尚未消费。
 
 启动校验规则（✅）：
 
@@ -576,9 +576,11 @@ services:
 
 - `make build` = `build-api` + `build-migrate` + `build-cron`，产出 `bin/api`、`bin/migrate`、`bin/cron`；在 Windows 下自动追加 `.exe`。
 - 三个二进制均使用 `CGO_ENABLED=0`、`-trimpath`、`-ldflags "-s -w"`；`api` 与 `cron` 额外注入 `-X main.version=$(VERSION)`。
-- 其他目标：`tidy`、`test`（`go test ./...`）、`vet`（`go vet ./...`）、`run`、`run-cron`、`migrate-up`、`migrate-down`、`compose-up`、`compose-down`、`image`。
+- 三个二进制均支持 `-c` / `-config` 指定配置文件（同目录的 `base.yaml` 作为基线，`env` 由文件内 `env` 字段声明），默认 `etc/dev.yaml`。
+- 运行类目标：`run`、`run-cron`、`start`（构建后后台启动 api 与 cron，pid 写入 `bin/`、日志写入 `logs/`）、`stop`、`clean`（先停止再删除 `bin/` 与 `logs/`）；`CONFIG` 变量可覆盖配置文件，如 `make start CONFIG=etc/prod.yaml`。
+- 其他目标：`tidy`、`test`（`go test ./...`）、`vet`（`go vet ./...`）、`migrate-up`、`migrate-down`、`compose-up`、`compose-down`、`image`。
 
-**Dockerfile（✅）**：`golang:1.24-alpine` 构建，产出 `/out/api`、`/out/migrate`、`/out/cron`；运行阶段基于 `gcr.io/distroless/static-debian12:nonroot`，复制 `etc/` 到 `/app/etc` 并设 `GOIM_BIZ_CONFIG_DIR=/app/etc`，非 root 运行，暴露 18180/18181/19191，入口 `/app/api`。cron 进程复用同一镜像，部署时覆盖 command 为 `/app/cron`。
+**Dockerfile（✅）**：`golang:1.24-alpine` 构建，产出 `/out/api`、`/out/migrate`、`/out/cron`；运行阶段基于 `gcr.io/distroless/static-debian12:nonroot`，复制 `etc/` 到 `/app/etc`，配置文件由启动参数指定（如 `/app/api -c /app/etc/prod.yaml`，默认读取工作目录下的 `etc/dev.yaml`），非 root 运行，暴露 18180/18181/19191，入口 `/app/api`。cron 进程复用同一镜像，部署时覆盖 command 为 `/app/cron -c /app/etc/prod.yaml`。
 
 **CI（`.github/workflows/ci.yml`，✅）**：在 push 到 main/master 与 PR 时触发，使用 Go 1.24，依次执行 `go mod download`、`go build ./...`、`go vet ./...`、`go test -race ./...`。
 

@@ -16,7 +16,7 @@ COPY --from=build /out/api /app/api
 COPY --from=build /out/migrate /app/migrate
 COPY --from=build /out/cron /app/cron
 COPY --from=build /src/etc /app/etc
-ENV GOIM_BIZ_CONFIG_DIR=/app/etc
+# 配置文件通过启动参数指定，例如：docker run ... /app/api -c /app/etc/prod.yaml
 USER nonroot:nonroot
 EXPOSE 18180 18181 19191
 ENTRYPOINT ["/app/api"]

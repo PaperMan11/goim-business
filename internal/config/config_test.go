@@ -8,13 +8,18 @@ import (
 )
 
 func TestLoadDev(t *testing.T) {
-	cfg, err := Load("../../etc", "dev")
+	cfg, err := LoadFile("../../etc/dev.yaml")
 	require.NoError(t, err)
 	require.Equal(t, "dev", cfg.Env)
 	require.NotEmpty(t, cfg.MySQL.DSN)
 	require.Equal(t, 15*time.Minute, cfg.Auth.AccessTTL)
 	require.Equal(t, 720*time.Hour, cfg.Auth.RefreshTTL)
 	require.Equal(t, 5, cfg.Auth.MaxSessionsPerUser)
+}
+
+func TestLoadFileMissing(t *testing.T) {
+	_, err := LoadFile("../../etc/not-exist.yaml")
+	require.Error(t, err)
 }
 
 func TestStoragePublicObjectURL(t *testing.T) {
@@ -35,10 +40,10 @@ func TestStoragePublicObjectURL(t *testing.T) {
 	require.Empty(t, StorageConfig{}.PublicObjectURL("public/avatar/123/a.png"))
 }
 
-func TestLoadEnvOverride(t *testing.T) {
+func TestLoadFileEnvOverride(t *testing.T) {
 	t.Setenv("GOIM_BIZ_AUTH__JWT_SECRET", "env-provided-secret-0123456789")
 
-	cfg, err := Load("../../etc", "dev")
+	cfg, err := LoadFile("../../etc/dev.yaml")
 	require.NoError(t, err)
 	require.Equal(t, "env-provided-secret-0123456789", cfg.Auth.JWTSecret)
 }

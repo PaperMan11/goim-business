@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -31,8 +32,12 @@ func main() {
 }
 
 func serve() error {
-	env := envOr("GOIM_BIZ_ENV", "dev")
-	cfg, err := config.Load(os.Getenv("GOIM_BIZ_CONFIG_DIR"), env)
+	configPath := "etc/dev.yaml"
+	flag.StringVar(&configPath, "c", configPath, "配置文件路径（YAML），env 由文件内 env 字段声明")
+	flag.StringVar(&configPath, "config", configPath, "配置文件路径，等同 -c")
+	flag.Parse()
+
+	cfg, err := config.LoadFile(configPath)
 	if err != nil {
 		return err
 	}
@@ -134,11 +139,4 @@ func probeHandler(a *app.App) http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 	return mux
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }
