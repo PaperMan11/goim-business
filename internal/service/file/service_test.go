@@ -66,6 +66,31 @@ func (r *fakeRepo) MarkDeleted(_ context.Context, id, userID int64, at time.Time
 	return true, nil
 }
 
+func (r *fakeRepo) ListExpiredPending(_ context.Context, now time.Time, limit int) ([]*domain.File, error) {
+	expired := make([]*domain.File, 0)
+	for _, f := range r.files {
+		if f.Status != domain.StatusPending || f.ExpiresAt == nil || f.ExpiresAt.After(now) {
+			continue
+		}
+		copied := *f
+		expired = append(expired, &copied)
+		if limit > 0 && len(expired) >= limit {
+			break
+		}
+	}
+	return expired, nil
+}
+
+func (r *fakeRepo) MarkDeletedIfPending(_ context.Context, id, userID int64, at time.Time) (bool, error) {
+	f, ok := r.files[id]
+	if !ok || f.UserID != userID || f.Status != domain.StatusPending {
+		return false, nil
+	}
+	f.Status = domain.StatusDeleted
+	f.UpdatedAt = at
+	return true, nil
+}
+
 type fakeStorage struct {
 	putURL      string
 	getURL      string

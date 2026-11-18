@@ -88,7 +88,7 @@ func (w *Worker) Provision(ctx context.Context, user *domain.User) error {
 	registerErr := w.im.RegisterUser(provisionCtx, userID, user.Nickname, w.resolveAvatarURL(user.AvatarKey))
 	// IM 侧账号已存在时注册不会更新既有资料（例如账号由其他系统预建或上次响应丢失），
 	// 需补一次全量资料同步；同步失败按开通失败处理，交给 outbox 重试。
-	if errors.Is(registerErr, ports.ErrIMUserAlreadyExists) {
+	if registerErr == nil || errors.Is(registerErr, ports.ErrIMUserAlreadyExists) {
 		registerErr = w.SyncProfile(provisionCtx, user)
 	}
 	if registerErr != nil {

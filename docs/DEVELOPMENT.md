@@ -36,7 +36,7 @@
 | 用户资料 | ✅ 最小闭环 | `/profile` 路由 + `profile_sync` outbox；头像走 `/files` 上传后写 `avatar_key`；展示用公开 `avatarUrl` |
 | 设备 | ✅ 已实现 | `account_devices` 表随注册/登录自动登记；`/devices` 列表与移除（移除同时撤销该设备会话） |
 | 客户端配置 | ✅ 已实现 | `client_configs` 表 + `/client-config`、`/client-config/schema`；版本化 ETag 与 304 |
-| 文件 | ✅ 头像上传已实现 | `file_objects` + RustFS/S3 预签名（`/files`）；孤儿清理 ⏳ |
+| 文件 | ✅ 头像上传已实现 | `file_objects` + RustFS/S3 预签名（`/files`）；过期 pending 由 cron 清理 |
 | 通知 / 推送 | ⏳ 规划中 | 无 `notifications` 表、无投递逻辑 |
 | 管理端 / OAuth | ⏳ 规划中 | 无管理端路由与角色体系 |
 | 多租户 | ❌ 不做 | 首版单租户，依赖 goim 多租户改造后再评估 |
@@ -1372,11 +1372,11 @@ POST /admin/announcements
 - `/client-config`：✅ `client_configs` + `GET /client-config`（版本化 ETag、304）、`GET /client-config/schema`；配置表缺失回退内置默认值。
 - 验收：配置版本递增、304 生效、设备列表可踢出已由单测覆盖；改昵称/头像后另一客户端可见 ⏳ 待联调环境。
 
-### M4 文件（头像 + 分片附件）+ 首版发布门禁（⏳ 清理任务待做）
+### M4 文件（头像 + 分片附件）+ 首版发布门禁（✅ 清理任务已实现）
 
 - RustFS 预签名、complete 校验、访问 URL、头像配额、分片上传、孤儿清理。
 - 验收：头像全链路；大文件分片上传/合并/取消；超大/非法类型被拒；未 complete 的对象 24h 清理。
-- 当前进度：头像单文件、附件分片（8MB/片、≤200MB）、complete 二次校验、abort、软删与配额已实现（✅）；孤儿清理任务（cron）待实现；环境就绪后需联调头像与分片全链路。
+- 当前进度：头像单文件、附件分片（8MB/片、≤200MB）、complete 二次校验、abort、软删与配额已实现（✅）；孤儿清理任务（cron `file_object_cleanup`，默认 1h 扫描、单批 100 条，先原子置 deleted 再 abort 分片/删除对象）已实现（✅）；环境就绪后需联调头像与分片全链路。
 - **首版门禁**：M0-M4 全部通过、Web 端完成 token 改造、压测与回滚演练通过后即可发布；B 档未实现不影响发布。当前 M2 代码闭环完成（后端 + Web 客户端），仅差联调环境上的端到端验收；M3 资料/设备/客户端配置代码闭环已完成，M4 文件上传（含分片）接口已实现，尚不满足发布门禁。
 
 ### M5 上线加固（⏳ 未开始，与 M4 并行收尾）

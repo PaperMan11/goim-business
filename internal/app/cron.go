@@ -11,30 +11,36 @@ import (
 
 	"goim-business/internal/client/goim"
 	"goim-business/internal/config"
+	filejob "goim-business/internal/job/file"
 	imjob "goim-business/internal/job/im"
 	"goim-business/internal/pkg/lock"
 	redislock "goim-business/internal/pkg/lock/redis"
+	"goim-business/internal/pkg/storage/s3"
 	"goim-business/internal/pkg/timex"
 	"goim-business/internal/repository"
 	accountrepo "goim-business/internal/repository/account"
+	filerepo "goim-business/internal/repository/file"
 	outboxrepo "goim-business/internal/repository/outbox"
 )
 
 // cronLockTTL 是 cron 互斥锁的持有时间；所有定时任务的 Timeout 都必须小于该值。
 const cronLockTTL = 5 * time.Minute
 
-// CronApp 是定时任务进程的精简容器：只装配 MySQL、Redis（分布式锁）、goim 客户端与 outbox worker，
-// 不构建会话缓存、令牌签发、限流与 HTTP handler 等 API 专用组件。
+// CronApp 是定时任务进程的精简容器：只装配 MySQL、Redis（分布式锁）、goim 客户端、
+// outbox worker 与文件对象清理器，不构建会话缓存、令牌签发、限流与 HTTP handler 等 API 专用组件。
 type CronApp struct {
 	Config *config.Config
 	Logger *zap.Logger
 
 	SQLDB *sql.DB
 	Redis *redis.Client
+	// Storage 为 nil 表示对象存储未配置，文件清理只回收元数据。
+	Storage s3.S3Client
 
-	IM     *goim.Client
-	Worker *imjob.Worker
-	Locker lock.Locker
+	IM          *goim.Client
+	Worker      *imjob.Worker
+	FileCleaner *filejob.Cleaner
+	Locker      lock.Locker
 	// LockPrefix 是 cron 锁键前缀，调度器会拼接任务名得到最终键。
 	LockPrefix string
 }
@@ -67,18 +73,39 @@ func NewCronApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*Cron
 		TokenRefreshAhead: cfg.IM.TokenRefreshAhead,
 	})
 
+	var storageClient s3.S3Client
+	if cfg.Storage.Enabled() {
+		storageClient, err = s3.NewS3Client(ctx, &s3.Config{
+			Endpoint:       cfg.Storage.Endpoint,
+			PublicEndpoint: cfg.Storage.PublicEndpoint,
+			AccessKey:      cfg.Storage.AccessKey,
+			SecretKey:      cfg.Storage.SecretKey,
+			Region:         cfg.Storage.Region,
+			Bucket:         cfg.Storage.Bucket,
+			UsePathStyle:   cfg.Storage.UsePathStyle,
+			PresignExpire:  cfg.Storage.PresignExpire,
+		})
+		if err != nil {
+			_ = rdb.Close()
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("初始化对象存储失败: %w", err)
+		}
+	}
+
 	return &CronApp{
-		Config: cfg,
-		Logger: log,
-		SQLDB:  sqlDB,
-		Redis:  rdb,
-		IM:     im,
+		Config:  cfg,
+		Logger:  log,
+		SQLDB:   sqlDB,
+		Redis:   rdb,
+		Storage: storageClient,
+		IM:      im,
 		Worker: imjob.NewWorker(accountrepo.NewUserRepo(db), imClient{client: im}, outboxrepo.New(db), cfg.IM.OutboxBatchSize, timex.Now, log.Sugar(),
 			imjob.WithAvatarURL(func(objectKey string) string {
 				return cfg.Storage.PublicObjectURL(objectKey)
 			})),
-		Locker:     redislock.NewRedisLocker(rdb, lock.WithDefaultTTL(cronLockTTL), lock.WithRetryStrategy(lock.NoRetry())),
-		LockPrefix: fmt.Sprintf("%s:%s:cron", cfg.Redis.KeyPrefix, cfg.Env),
+		FileCleaner: filejob.NewCleaner(filerepo.New(db), storageClient, cfg.Storage.CleanupBatchSize, timex.Now, log.Sugar()),
+		Locker:      redislock.NewRedisLocker(rdb, lock.WithDefaultTTL(cronLockTTL), lock.WithRetryStrategy(lock.NoRetry())),
+		LockPrefix:  fmt.Sprintf("%s:%s:cron", cfg.Redis.KeyPrefix, cfg.Env),
 	}, nil
 }
 

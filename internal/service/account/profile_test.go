@@ -47,7 +47,8 @@ func TestUpdateProfileSyncsIM(t *testing.T) {
 	require.Equal(t, ports.OutboxStatusDone, entry.Status)
 
 	calls, updateUser, updateNickname, updateAvatar := env.provisioner.lastUpdate()
-	require.Equal(t, 1, calls)
+	// 开通成功后会同步一次资料，随后 UpdateProfile 再同步一次。
+	require.Equal(t, 2, calls)
 	require.Equal(t, resp.User.UserID, updateUser)
 	require.Equal(t, "Alice", updateNickname)
 	require.Empty(t, updateAvatar)
@@ -80,7 +81,8 @@ func TestUpdateProfileSyncsAvatarURL(t *testing.T) {
 	require.Equal(t, key, env.mustUser(t, userID).AvatarKey)
 	_, _, _, gotAvatar = env.provisioner.lastUpdate()
 	require.Empty(t, gotAvatar)
-	require.Equal(t, 2, env.provisioner.updateCallCount())
+	// 开通成功 1 次 + 两次 UpdateProfile 各 1 次。
+	require.Equal(t, 3, env.provisioner.updateCallCount())
 }
 
 func TestAvatarObjectKeyResolvesToPublicURL(t *testing.T) {

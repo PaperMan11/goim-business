@@ -13,6 +13,7 @@ import (
 	"goim-business/internal/app"
 	"goim-business/internal/config"
 	appcron "goim-business/internal/cron"
+	filejob "goim-business/internal/job/file"
 	imjob "goim-business/internal/job/im"
 	"goim-business/internal/pkg/logger"
 )
@@ -39,8 +40,8 @@ func run() error {
 	}
 	defer func() { _ = log.Sync() }()
 
-	if cfg.IM.BaseURL == "" {
-		log.Info("IM 未配置，cron 无需运行")
+	if cfg.IM.BaseURL == "" && !cfg.Storage.Enabled() {
+		log.Info("IM 与对象存储均未配置，cron 无需运行")
 		return nil
 	}
 
@@ -52,8 +53,15 @@ func run() error {
 
 	scheduler := appcron.NewScheduler(a.Locker, a.LockPrefix, log)
 	// 后续新增定时任务时在此注册；每个任务通过 Name 自动获得独立的分布式锁。
-	if err := scheduler.Register(imjob.NewOutboxJob(a.Worker, cfg.IM.OutboxScanInterval)); err != nil {
-		return err
+	if cfg.IM.BaseURL != "" {
+		if err := scheduler.Register(imjob.NewOutboxJob(a.Worker, cfg.IM.OutboxScanInterval)); err != nil {
+			return err
+		}
+	}
+	if cfg.Storage.Enabled() {
+		if err := scheduler.Register(filejob.NewCleanupJob(a.FileCleaner, cfg.Storage.CleanupInterval)); err != nil {
+			return err
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

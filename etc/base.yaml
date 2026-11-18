@@ -81,3 +81,6 @@ storage:
   presign_expire: 15m
   # 分片上传签名有效期；大文件弱网上传可能超过单文件签名窗口。
   multipart_presign_expire: 2h
+  # 过期 pending 文件清理任务：扫描间隔与单批处理条数；<=0 时使用内置默认值（1h / 100）。
+  cleanup_interval: 1h
+  cleanup_batch_size: 100

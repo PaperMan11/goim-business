@@ -80,6 +80,39 @@ func (r *Repo) MarkDeleted(ctx context.Context, id, userID int64, at time.Time) 
 	return result.RowsAffected > 0, nil
 }
 
+// ListExpiredPending 返回已过期且仍为 pending 的记录，供清理任务回收对象。
+func (r *Repo) ListExpiredPending(ctx context.Context, now time.Time, limit int) ([]*domain.File, error) {
+	var recs []model.FileObject
+	err := repository.DBFromContext(ctx, r.db).
+		Where("status = ? AND expires_at IS NOT NULL AND expires_at < ?", model.FileStatusPending, now).
+		Order("expires_at ASC, id ASC").
+		Limit(limit).
+		Find(&recs).Error
+	if err != nil {
+		return nil, err
+	}
+	files := make([]*domain.File, 0, len(recs))
+	for idx := range recs {
+		files = append(files, fromRecord(&recs[idx]))
+	}
+	return files, nil
+}
+
+// MarkDeletedIfPending 仅把仍为 pending 的记录置为 deleted，避免与 complete 竞争。
+func (r *Repo) MarkDeletedIfPending(ctx context.Context, id, userID int64, at time.Time) (bool, error) {
+	result := repository.DBFromContext(ctx, r.db).
+		Model(&model.FileObject{}).
+		Where("id = ? AND user_id = ? AND status = ?", id, userID, model.FileStatusPending).
+		Updates(map[string]any{
+			"status":     model.FileStatusDeleted,
+			"updated_at": at,
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
 func toRecord(f *domain.File) *model.FileObject {
 	return &model.FileObject{
 		ID:        f.ID,

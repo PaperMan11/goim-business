@@ -115,6 +115,10 @@ type StorageConfig struct {
 	PresignExpire  time.Duration `mapstructure:"presign_expire"`
 	// MultipartPresignExpire 是分片上传签名有效期；大文件弱网需要更长窗口。
 	MultipartPresignExpire time.Duration `mapstructure:"multipart_presign_expire"`
+	// CleanupInterval 是过期 pending 文件清理任务的扫描间隔；<=0 时使用默认值。
+	CleanupInterval time.Duration `mapstructure:"cleanup_interval"`
+	// CleanupBatchSize 是单次清理的最大记录数；<=0 时使用默认值。
+	CleanupBatchSize int `mapstructure:"cleanup_batch_size"`
 }
 
 // Enabled 表示对象存储已配置。
