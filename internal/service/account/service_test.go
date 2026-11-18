@@ -414,6 +414,10 @@ func (f *fakeUsers) GetByID(_ context.Context, id int64) (*domain.User, error) {
 	return &clone, nil
 }
 
+func (f *fakeUsers) GetByIDForUpdate(_ context.Context, id int64) (*domain.User, error) {
+	return f.GetByID(context.Background(), id)
+}
+
 func (f *fakeUsers) GetByIDs(_ context.Context, ids []int64) ([]*domain.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -429,18 +433,21 @@ func (f *fakeUsers) GetByIDs(_ context.Context, ids []int64) ([]*domain.User, er
 	return users, nil
 }
 
-func (f *fakeUsers) UpdateProfile(_ context.Context, id int64, nickname, avatarKey, bio string, at time.Time) error {
+func (f *fakeUsers) UpdateProfile(_ context.Context, id int64, nickname, avatarKey, bio string, at time.Time) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	user, ok := f.byID[id]
 	if !ok {
-		return domain.ErrNotFound
+		return false, domain.ErrNotFound
+	}
+	if user.Status != domain.StatusNormal {
+		return false, nil
 	}
 	user.Nickname = nickname
 	user.AvatarKey = avatarKey
 	user.Bio = bio
 	user.UpdatedAt = at
-	return nil
+	return true, nil
 }
 
 func (f *fakeUsers) TouchLastLogin(_ context.Context, id int64, at time.Time) error {

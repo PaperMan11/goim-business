@@ -133,8 +133,9 @@ func (p *Purger) purge(ctx context.Context, user *domain.User) (bool, error) {
 	var purged bool
 	err := p.tx.WithTx(ctx, func(ctx context.Context) error {
 		now := p.now()
-		// 用 deleted_<id> 释放原登录名，同时保留审计线索。
-		ok, err := p.users.MarkPurged(ctx, user.ID, fmt.Sprintf("deleted_%d", user.ID), now)
+		// 用 ~deleted_<id> 释放原登录名，同时保留审计线索；
+		// "~" 不在登录名允许字符（a-z0-9_）内，避免与真实用户注册的 deleted_<id> 撞唯一键。
+		ok, err := p.users.MarkPurged(ctx, user.ID, fmt.Sprintf("~deleted_%d", user.ID), now)
 		if err != nil {
 			return err
 		}

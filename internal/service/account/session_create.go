@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	domain "goim-business/internal/domain/account"
@@ -107,6 +108,20 @@ func (s *Service) activateSession(ctx context.Context, sess *domain.Session, kic
 	if err := s.state.Activate(ctx, convert.ToString(sess.ID), convert.ToString(sess.UserID), ttl); err != nil {
 		s.log.Errorf("写入会话活跃标记失败: sid=%d, err=%v", sess.ID, err)
 		return errcode.ErrDependency
+	}
+	// 激活后复核会话是否已被并发注销撤销：若注销的 RevokeAll 恰好落在会话提交与激活之间，
+	// 这里会把刚写入的活跃标记删掉并终止请求，避免返回一个已被撤销的登录态。
+	fresh, err := s.sessions.GetByID(ctx, sess.ID)
+	if err != nil {
+		_ = s.state.Deactivate(ctx, convert.ToString(sess.ID))
+		if errors.Is(err, domain.ErrNotFound) {
+			return errcode.ErrUnauthenticated
+		}
+		return s.dbErr("复核会话状态", err)
+	}
+	if !fresh.IsActive(s.now()) {
+		_ = s.state.Deactivate(ctx, convert.ToString(sess.ID))
+		return errcode.ErrUnauthenticated.WithMessage("登录态已失效，请重新登录")
 	}
 	return nil
 }

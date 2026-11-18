@@ -1426,12 +1426,14 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 
 1. `DELETE /api/v1/account`（Bearer 鉴权）：
    - 事务内 `MarkDeleting(userID, purgeAt)`：`WHERE status=1` 置 `3` 并写 `purge_at = now + deletion_cooldown`；条件更新失败返回冲突，重复注销幂等。同一事务 `Enqueue(userID, "purge_im_user", "{}")`。
-   - 提交后：`RevokeAll(userID, now, 0)` 逐个 `Deactivate(sid)`，删除 IM token 缓存（按平台 1~5 直接 DEL，不使用 SCAN），返回 `{ "purgeAt": "..." }`。
+   - 提交后：`RevokeAll(userID, now, 0)` 逐个 `Deactivate(sid)`，删除 IM token 缓存（覆盖全部平台编码含 HarmonyOS 11，直接 DEL，不使用 SCAN），返回 `{ "purgeAt": "..." }`。
    - 尽力即时同步：`imSync.Purge(ctx, user)`，成功/失败交由 `Settle` 落定 outbox；失败不影响接口成功。
 2. 冷却期内：`CanAuthenticate` 已对 `3/4` 拒绝；公开资料查询按 `status IN (3,4)` 过滤，避免已注销账号继续被他人看到。
+   - 并发安全：登录/刷新在事务内用 `SELECT ... FOR UPDATE` 复核用户状态，与注销的 `MarkDeleting` 行锁串行化；会话激活后再次复核是否已被撤销，命中则回滚活跃标记并拒绝本次登录。
+   - 资料更新仅允许 `status=1` 的账号；IM 同步前重新读取当前用户，账号进入注销后不再覆盖占位资料。
 3. cron 任务 `account_purge`（默认 1h、单批 50）：
    - `ListDueForPurge(now, limit)`：`status=3 AND purge_at <= now`。
-   - 每条在事务内 `MarkPurged`：`WHERE status=3` 置 `4`，同时清空 `nickname/avatar_key/bio`，`login_name` 改为 `deleted_<id>` 释放原名（保留唯一性与审计）。
+   - 每条在事务内 `MarkPurged`：`WHERE status=3` 置 `4`，同时清空 `nickname/avatar_key/bio`，`login_name` 改为 `~deleted_<id>` 释放原名（`~` 不在登录名字符集内，避免与真实用户名冲突，同时保留审计）。
    - 事务内删除 `account_credentials`、`account_devices` 与该用户 `account_sessions`；对 `file_objects` 执行 `MarkDeletedByUser`（`status<>2` → `2`），对象交给文件回收任务。
    - 单条失败只记日志并继续，下一轮重试；`MarkPurged` 的条件更新保证多实例下只执行一次。
 

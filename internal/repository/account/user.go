@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	domain "goim-business/internal/domain/account"
 	"goim-business/internal/model"
@@ -105,6 +106,19 @@ func (r *UserRepo) GetByID(ctx context.Context, id int64) (*domain.User, error) 
 	return userFromRecord(&record), nil
 }
 
+// GetByIDForUpdate 在当前事务内按主键加行锁读取用户；必须由事务调用，否则锁立即释放。
+func (r *UserRepo) GetByIDForUpdate(ctx context.Context, id int64) (*domain.User, error) {
+	var record model.User
+	err := r.dbFrom(ctx).
+		Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+		Where("id = ?", id).
+		First(&record).Error
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return userFromRecord(&record), nil
+}
+
 // GetByIDs 批量查询用户；不存在的 ID 直接跳过。
 func (r *UserRepo) GetByIDs(ctx context.Context, ids []int64) ([]*domain.User, error) {
 	if len(ids) == 0 {
@@ -140,17 +154,20 @@ func (r *UserRepo) UpdateIMStatus(ctx context.Context, userID int64, status int8
 		Updates(updates).Error)
 }
 
-// UpdateProfile 覆盖写入用户资料；空字符串表示清空对应字段。
-func (r *UserRepo) UpdateProfile(ctx context.Context, userID int64, nickname, avatarKey, bio string, at time.Time) error {
-	updates := map[string]any{
-		"nickname":   nickname,
-		"avatar_key": avatarKey,
-		"bio":        bio,
-		"updated_at": at,
+// UpdateProfile 覆盖写入用户资料；仅正常账号可更新，避免注销中的并发请求写回敏感数据。
+func (r *UserRepo) UpdateProfile(ctx context.Context, userID int64, nickname, avatarKey, bio string, at time.Time) (bool, error) {
+	result := r.dbFrom(ctx).Model(&model.User{}).
+		Where("id = ? AND status = ?", userID, model.UserStatusNormal).
+		Updates(map[string]any{
+			"nickname":   nickname,
+			"avatar_key": avatarKey,
+			"bio":        bio,
+			"updated_at": at,
+		})
+	if result.Error != nil {
+		return false, mapErr(result.Error)
 	}
-	return mapErr(r.dbFrom(ctx).Model(&model.User{}).
-		Where("id = ?", userID).
-		Updates(updates).Error)
+	return result.RowsAffected > 0, nil
 }
 
 // MarkDeleting 把正常账号置为注销中并写入物理清除时间；条件更新保证重复注销幂等。

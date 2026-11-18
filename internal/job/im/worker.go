@@ -112,6 +112,16 @@ func (w *Worker) Provision(ctx context.Context, user *domain.User) error {
 func (w *Worker) SyncProfile(ctx context.Context, user *domain.User) error {
 	// 客户端断开不应导致已发出的同步请求被误判失败。
 	syncCtx := context.WithoutCancel(ctx)
+	// 调用 IM 前读取当前资料：避免用任务入队时的旧快照覆盖注销占位资料，
+	// 账号进入注销中/已注销后直接跳过。
+	current, err := w.users.GetByID(syncCtx, user.ID)
+	if err != nil {
+		return err
+	}
+	if current.Status != domain.StatusNormal {
+		return nil
+	}
+	user = current
 	if err := w.im.UpdateUserInfo(syncCtx, convert.ToString(user.ID), user.Nickname, w.resolveAvatarURL(user.AvatarKey)); err != nil {
 		w.log.Warnf("IM 资料同步失败: user_id=%d, err=%v", user.ID, err)
 		return err

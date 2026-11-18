@@ -10,10 +10,13 @@ type UserRepository interface {
 	Create(ctx context.Context, user *User) error
 	GetByLoginName(ctx context.Context, loginName string) (*User, error)
 	GetByID(ctx context.Context, id int64) (*User, error)
+	// GetByIDForUpdate 在当前事务内按主键加行锁读取用户，用于登录/刷新与注销串行化。
+	GetByIDForUpdate(ctx context.Context, id int64) (*User, error)
 	GetByIDs(ctx context.Context, ids []int64) ([]*User, error)
 	TouchLastLogin(ctx context.Context, id int64, at time.Time) error
 	UpdateIMStatus(ctx context.Context, userID int64, status int8, syncedAt *time.Time, at time.Time) error
-	UpdateProfile(ctx context.Context, userID int64, nickname, avatarKey, bio string, at time.Time) error
+	// UpdateProfile 仅在账号正常时更新资料；返回是否更新成功。
+	UpdateProfile(ctx context.Context, userID int64, nickname, avatarKey, bio string, at time.Time) (bool, error)
 	// MarkDeleting 把正常账号置为注销中并写入物理清除时间；返回是否更新成功。
 	MarkDeleting(ctx context.Context, userID int64, purgeAt, at time.Time) (bool, error)
 	// ListDueForPurge 返回注销中且已到清除时间的账号，按 purge_at 升序，最多 limit 条。

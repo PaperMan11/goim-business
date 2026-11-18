@@ -75,6 +75,21 @@ func (s *Service) Login(ctx context.Context, in types.LoginRequest) (*types.Auth
 		kicked []int64
 	)
 	err = s.tx.WithTx(ctx, func(ctx context.Context) error {
+		// 事务内加行锁复核状态，与注销的 MarkDeleting 串行化：
+		// 若注销先提交，这里会读到 status=3 并终止；若登录先提交，注销的 RevokeAll 必然能看到新会话。
+		locked, err := s.users.GetByIDForUpdate(ctx, user.ID)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				return errcode.ErrUnauthenticated
+			}
+			return s.dbErr("锁定登录用户", err)
+		}
+		if err := locked.CanAuthenticate(); err != nil {
+			if errors.Is(err, domain.ErrAccountFrozen) {
+				return errcode.ErrAccountFrozen
+			}
+			return errcode.ErrInvalidCredential
+		}
 		if err := s.users.TouchLastLogin(ctx, user.ID, now); err != nil {
 			return s.dbErr("更新最后登录时间", err)
 		}

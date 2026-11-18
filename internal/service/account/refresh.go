@@ -55,6 +55,20 @@ func (s *Service) Refresh(ctx context.Context, in types.RefreshRequest) (*types.
 		replay  bool
 	)
 	err = s.tx.WithTx(ctx, func(ctx context.Context) error {
+		// 与注销的 MarkDeleting 用同一用户行锁串行化，避免刷新在注销后创建新会话。
+		locked, err := s.users.GetByIDForUpdate(ctx, user.ID)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) {
+				return errcode.ErrUnauthenticated
+			}
+			return s.dbErr("锁定刷新用户", err)
+		}
+		if err := locked.CanAuthenticate(); err != nil {
+			if errors.Is(err, domain.ErrAccountFrozen) {
+				return errcode.ErrAccountFrozen
+			}
+			return errcode.ErrUnauthenticated
+		}
 		rotated, err := s.sessions.MarkRotated(ctx, sess.ID, now)
 		if err != nil {
 			return s.dbErr("标记会话轮换", err)

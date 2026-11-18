@@ -102,7 +102,7 @@ func TestPurgerClearsDueAccount(t *testing.T) {
 
 	stored := users.users[1]
 	require.Equal(t, domain.StatusDeleted, stored.Status)
-	require.Equal(t, "deleted_1", stored.LoginName)
+	require.Equal(t, "~deleted_1", stored.LoginName)
 	require.Empty(t, stored.Nickname)
 	require.Empty(t, stored.AvatarKey)
 	require.Empty(t, stored.Bio)

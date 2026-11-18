@@ -422,6 +422,7 @@ func TestMultipartAbort(t *testing.T) {
 	require.NoError(t, svc.MultipartAbort(context.Background(), 42, "1"))
 	require.Equal(t, domain.StatusDeleted, repo.files[1].Status)
 	require.Len(t, storage.aborted, 1)
+	require.Len(t, storage.deleted, 1, "abort 后仍需删除可能已合并的对象")
 }
 
 func TestRefreshMultipartParts(t *testing.T) {

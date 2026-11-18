@@ -58,8 +58,12 @@ func (s *Service) UpdateProfile(ctx context.Context, userID int64, in types.Upda
 
 	now := s.now()
 	if err := s.tx.WithTx(ctx, func(ctx context.Context) error {
-		if err := s.users.UpdateProfile(ctx, user.ID, nickname, avatarKey, bio, now); err != nil {
+		updated, err := s.users.UpdateProfile(ctx, user.ID, nickname, avatarKey, bio, now)
+		if err != nil {
 			return s.dbErr("更新用户资料", err)
+		}
+		if !updated {
+			return errcode.ErrConflict.WithMessage("账号状态已变化，无法更新资料")
 		}
 		// 与资料变更同事务写入：只要事务提交，IM 同步任务就不会丢。
 		if err := s.enqueueIMOutbox(ctx, user.ID, ports.OutboxActionProfileSync); err != nil {

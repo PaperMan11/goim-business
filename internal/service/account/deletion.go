@@ -12,7 +12,8 @@ import (
 )
 
 // imTokenPlatforms 是注销时需要清理 IM token 缓存的平台编码；逐个 DEL，不使用 SCAN。
-var imTokenPlatforms = []int8{1, 2, 3, 4, 5}
+// 需覆盖 httpx 支持的全部平台，包含 HarmonyOS(11)。
+var imTokenPlatforms = []int8{1, 2, 3, 4, 5, 11}
 
 // DeleteAccount 注销当前账号：立即下线、清理缓存并同步 IM，冷却期结束后由定时任务物理清除。
 func (s *Service) DeleteAccount(ctx context.Context, userID int64) (*types.DeleteAccountResp, error) {

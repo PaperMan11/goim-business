@@ -312,9 +312,15 @@ func (s *Service) MultipartAbort(ctx context.Context, userID int64, rawFileID st
 	if !ok {
 		return errcode.ErrConflict.WithMessage("文件状态已变化，请刷新后重试")
 	}
-	if s.abortBestEffort(ctx, file.ObjectKey, file.UploadID) {
-		s.markObjectDeletedBestEffort(ctx, file.ID)
+	if !s.abortBestEffort(ctx, file.ObjectKey, file.UploadID) {
+		return nil
 	}
+	// 与删除一致：分片可能已合并但 MarkReady 未落库，abort 后仍需删除可能存在的对象。
+	if err := s.s3.DeleteObject(ctx, file.ObjectKey); err != nil && !s3.IsNotFound(err) {
+		s.log.Warnf("取消分片后删除对象失败: file_id=%d, key=%s, err=%v", file.ID, file.ObjectKey, err)
+		return nil
+	}
+	s.markObjectDeletedBestEffort(ctx, file.ID)
 	return nil
 }
 
@@ -411,10 +417,12 @@ func (s *Service) Delete(ctx context.Context, userID int64, rawFileID string) er
 		return nil
 	}
 	if wasPending && file.UploadID != "" {
-		if s.abortBestEffort(ctx, file.ObjectKey, file.UploadID) {
-			s.markObjectDeletedBestEffort(ctx, file.ID)
+		if !s.abortBestEffort(ctx, file.ObjectKey, file.UploadID) {
+			// abort 失败时保留 object_deleted_at 为空，由清理任务重试 abort 与删除。
+			return nil
 		}
-		return nil
+		// abort 成功后继续删除对象：分片可能已完成而 MarkReady 未落库，
+		// 此时 S3 已存在对象，仅 abort 会永久泄漏；对未完成分片而言 DeleteObject 是空操作。
 	}
 	if err := s.s3.DeleteObject(ctx, file.ObjectKey); err != nil && !s3.IsNotFound(err) {
 		// 元数据已软删，对象残留由清理任务按 deleted 状态回收。
