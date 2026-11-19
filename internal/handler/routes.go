@@ -38,7 +38,7 @@ func InitRoutes(a *app.App) *gin.Engine {
 		})
 	}
 
-	baseRoute := r.Group("/api/v1")
+	baseRoute := r.Group("/biz-api/v1")
 
 	account.InitRoutes(baseRoute, a)
 	clientconfig.InitRoutes(baseRoute, a)

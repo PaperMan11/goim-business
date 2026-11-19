@@ -30,8 +30,11 @@ func Config(a *app.App) gin.HandlerFunc {
 			return
 		}
 		c.Header("ETag", etag)
+		// no-cache 要求客户端每次带 If-None-Match 校验，命中后才可复用本地缓存。
 		c.Header("Cache-Control", "no-cache")
 		if etagMatches(c.GetHeader("If-None-Match"), etag) {
+			// 304 不带响应体，仅保留 ETag 与 Cache-Control；客户端继续使用本地配置。
+			// 显式写入业务码，保证访问日志把该请求记录为成功而不是缺失 code。
 			c.Set(response.CodeKey, 0)
 			c.Status(http.StatusNotModified)
 			return
