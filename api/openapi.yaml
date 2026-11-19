@@ -400,7 +400,8 @@ paths:
       description: |
         校验 purpose / mime / size 后生成服务端对象键与 PUT 预签名 URL，记录以 pending 状态落库。
         客户端按返回的 method、uploadUrl 与 headers 直接上传对象字节，服务端不代理文件内容。
-        首版仅支持头像：purpose=avatar，mime 限 jpeg/png/webp，size ≤ 5MB。
+        支持头像与单文件附件：purpose=avatar（size ≤ 5MB）；purpose=attachment（size ≤ 8MB，
+        超过 8MB 改用 `/files/multipart/presign`）。
         pending 记录 24 小时未完成时由清理任务回收。
         错误码：1001 参数错误、1002 未认证或登录态已失效、
         9001 服务内部错误、9002 依赖服务不可用（对象存储未配置时同样返回 9002）。
@@ -1378,8 +1379,8 @@ components:
       properties:
         purpose:
           type: string
-          description: 文件用途；首版仅支持 avatar。
-          enum: [avatar]
+          description: 文件用途；avatar 为头像，attachment 为业务附件。
+          enum: [avatar, attachment]
           example: avatar
         fileName:
           type: string
@@ -1388,15 +1389,26 @@ components:
           example: me.png
         mime:
           type: string
-          description: 文件类型；必须与实际上传的 Content-Type 一致。
-          enum: ["image/jpeg", "image/png", "image/webp"]
+          description: 文件类型；必须与实际上传的 Content-Type 一致。avatar 仅支持图片，attachment 支持下方完整白名单。
+          enum:
+            - "image/jpeg"
+            - "image/png"
+            - "image/webp"
+            - "image/gif"
+            - "application/pdf"
+            - "application/zip"
+            - "text/plain"
+            - "video/mp4"
+            - "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            - "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            - "application/vnd.openxmlformats-officedocument.presentationml.presentation"
           example: image/png
         size:
           type: integer
           format: int64
           minimum: 1
-          maximum: 5242880
-          description: 文件字节数；头像上限 5MB。
+          maximum: 8388608
+          description: 文件字节数；avatar ≤ 5MB，attachment ≤ 8MB（超过 8MB 使用分片上传）。
           example: 120000
         sha256:
           type: string

@@ -118,7 +118,7 @@ const { data } = await res.json();
 | access token 过期 | `2004` | 用 refresh token 续期，或重新登录 |
 | refresh 令牌被重放 | `2005` | 重新登录（服务端会撤销整个令牌家族） |
 
-跨域部署时，网关或服务端的 CORS 允许头需要包含：`Content-Type, Authorization, X-Client-Platform, X-Client-Version, X-Device-Id, X-Request-ID, Idempotency-Key`。
+跨域部署时，网关或服务端的 CORS 允许头需要包含：`Content-Type, Authorization, X-Client-Platform, X-Client-Version, X-Device-Id, X-Request-ID, Idempotency-Key`；同时必须暴露 `ETag`（`Access-Control-Expose-Headers: ETag`），否则 `/client-config` 的 304 缓存逻辑在浏览器中读不到 ETag。
 
 ## 7. 版本迁移注意
 
@@ -128,7 +128,7 @@ const { data } = await res.json();
 
 ## 8. 大文件分片上传与重试
 
-附件（`purpose=attachment`）超过 8MB 时使用分片上传，最大 200MB，固定 8MB/片、最多 100 片。头像等小文件仍走单文件 PUT。
+头像与不超过 8MB 的附件统一走 `POST /files/presign` 单文件 PUT（`purpose` 分别为 `avatar`、`attachment`）；附件超过 8MB 时使用分片上传，最大 200MB，固定 8MB/片、最多 100 片。
 
 ### 8.1 整体流程
 

@@ -237,6 +237,30 @@ func TestPresignUpload(t *testing.T) {
 	require.True(t, file.ExpiresAt.Equal(now.Add(24*time.Hour)))
 }
 
+func TestPresignUploadAttachmentWithinSingleLimit(t *testing.T) {
+	repo := newFakeRepo()
+	storage := &fakeStorage{putURL: "https://rustfs.example/put"}
+	svc := newTestService(repo, storage, time.Now())
+
+	res, err := svc.PresignUpload(context.Background(), 42, types.FilePresignRequest{
+		Purpose:  domain.PurposeAttachment,
+		FileName: "report.pdf",
+		MIME:     "application/pdf",
+		Size:     domain.MaxSingleUploadBytes(domain.PurposeAttachment),
+	})
+	require.NoError(t, err)
+	require.Contains(t, res.ObjectKey, "attachment/42/")
+	require.Equal(t, domain.PurposeAttachment, repo.files[1].Purpose)
+	require.Equal(t, domain.StatusPending, repo.files[1].Status)
+
+	_, err = svc.PresignUpload(context.Background(), 42, types.FilePresignRequest{
+		Purpose: domain.PurposeAttachment,
+		MIME:    "application/pdf",
+		Size:    domain.MaxSingleUploadBytes(domain.PurposeAttachment) + 1,
+	})
+	require.Equal(t, errcode.CodeInvalidParam, errorCode(t, err))
+}
+
 func TestPresignUploadValidation(t *testing.T) {
 	repo := newFakeRepo()
 	svc := newTestService(repo, &fakeStorage{}, time.Now())
