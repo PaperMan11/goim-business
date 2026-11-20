@@ -24,7 +24,7 @@ storage:
 # 开发环境 goim im-api；admin_secret 可被 GOIM_BIZ_IM__ADMIN_SECRET 覆盖。
 im:
   base_url: "http://192.168.241.128:18880"
-  api_base_url: "http://192.168.241.128:18880"
+  api_base_url: "http://192.168.241.128:18880/api/v1"
   # msggateway 的 WebSocket 监听端口（WsServer.Port）。
   ws_url: "ws://192.168.241.128:50001/ws"
   admin_user_id: "imAdmin"
