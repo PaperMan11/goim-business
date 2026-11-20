@@ -8,7 +8,7 @@ import (
 	"goim-business/internal/pkg/response"
 )
 
-// IMToken POST /api/v1/im/token
+// IMToken POST /biz-api/v1/im/token
 func IMToken(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		result, err := a.AccountService.IMToken(c.Request.Context(), middlewares.UserIDFrom(c), middlewares.PlatformIDFrom(c))
@@ -20,7 +20,7 @@ func IMToken(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// IMStatus GET /api/v1/im/status
+// IMStatus GET /biz-api/v1/im/status
 func IMStatus(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		result, err := a.AccountService.IMStatus(c.Request.Context(), middlewares.UserIDFrom(c))
@@ -32,7 +32,7 @@ func IMStatus(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// IMRetry POST /api/v1/im/retry
+// IMRetry POST /biz-api/v1/im/retry
 func IMRetry(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middlewares.UserIDFrom(c)

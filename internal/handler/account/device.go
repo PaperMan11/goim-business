@@ -8,7 +8,7 @@ import (
 	"goim-business/internal/pkg/response"
 )
 
-// Devices GET /api/v1/devices
+// Devices GET /biz-api/v1/devices
 func Devices(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		views, err := a.AccountService.Devices(c.Request.Context(), middlewares.UserIDFrom(c))
@@ -20,7 +20,7 @@ func Devices(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// RemoveDevice DELETE /api/v1/devices/:deviceId
+// RemoveDevice DELETE /biz-api/v1/devices/:deviceId
 func RemoveDevice(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := a.AccountService.RemoveDevice(

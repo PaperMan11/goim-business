@@ -29,7 +29,7 @@ X-Client-Version: 1.0.0            # 可选，最长 32
 
 | ID | 步骤 | 期望 | 结果 |
 |---|---|---|---|
-| B1 | `POST /api/v1/account/register`（含 `X-Device-Id`） | `code=0`，返回 `token`/`refreshToken`/`user` | ☐ |
+| B1 | `POST /biz-api/v1/account/register`（含 `X-Device-Id`） | `code=0`，返回 `token`/`refreshToken`/`user` | ☐ |
 | B2 | 用同一 `loginName` 再注册 | `code=2001` 账号已存在 | ☐ |
 | B3 | 注册/登录不带 `X-Device-Id` | `code=1001` | ☐ |
 | B4 | 错误密码登录 | `code=2002` | ☐ |
@@ -44,10 +44,10 @@ X-Client-Version: 1.0.0            # 可选，最长 32
 
 | ID | 步骤 | 期望 | 结果 |
 |---|---|---|---|
-| C1 | B1 注册成功后 `GET /api/v1/im/status` | `code=0`，`status=1`（Ready），`syncedAt` 非空 | ☐ |
-| C2 | `POST /api/v1/im/token` 连续调用两次 | 均 `code=0`，返回 `token`/`expireTimeSeconds`/`apiBaseUrl`/`wsUrl`；第二次命中 Redis 缓存 | ☐ |
+| C1 | B1 注册成功后 `GET /biz-api/v1/im/status` | `code=0`，`status=1`（Ready），`syncedAt` 非空 | ☐ |
+| C2 | `POST /biz-api/v1/im/token` 连续调用两次 | 均 `code=0`，返回 `token`/`expireTimeSeconds`/`apiBaseUrl`/`wsUrl`；第二次命中 Redis 缓存 | ☐ |
 | C3 | 停 goim 后注册新用户，再恢复 goim，等待 cron 一轮 | 注册仍成功且 `im_status=2`；恢复后自动补偿为 `1`，无需人工 `/im/retry` | ☐ |
-| C4 | 停 goim 期间执行 `POST /api/v1/im/retry` | 返回 `code=9002`；goim 恢复后手动 retry 成功置 `1` | ☐ |
+| C4 | 停 goim 期间执行 `POST /biz-api/v1/im/retry` | 返回 `code=9002`；goim 恢复后手动 retry 成功置 `1` | ☐ |
 | C5 | 清空 `im.base_url` 后调用 `/im/token` | `code=9002`，注册流程正常（不阻塞） | ☐ |
 | C6 | **1102 场景**：在 goim 侧预建与业务 `userID` 相同的账号（昵称为空、faceURL 为空），业务侧已有头像后触发 `/im/retry` | 开通视为成功，IM 侧昵称/faceURL 被补齐为业务资料（公开 `avatarUrl`） | ☐ |
 | C7 | 缓存 token 剩余有效期不足 10 分钟时再次 `/im/token` | 返回新 token（不返回即将过期的缓存值） | ☐ |
@@ -57,7 +57,7 @@ X-Client-Version: 1.0.0            # 可选，最长 32
 
 | ID | 步骤 | 期望 | 结果 |
 |---|---|---|---|
-| D1 | `PUT /api/v1/profile/me` 改昵称（带首尾空格）与 bio | `code=0`，返回规范化后的值；`GET /profile/me` 一致 | ☐ |
+| D1 | `PUT /biz-api/v1/profile/me` 改昵称（带首尾空格）与 bio | `code=0`，返回规范化后的值；`GET /profile/me` 一致 | ☐ |
 | D2 | 完成头像上传后 `PUT /profile/me {avatarKey: objectKey}` | 返回 `avatarKey` 与 `avatarUrl`；`avatarUrl = public_endpoint/bucket/key` | ☐ |
 | D3 | IM 侧查询该用户 | faceURL 与 `avatarUrl` 相同（D2 之后且 IM Ready） | ☐ |
 | D4 | 传入非 `public/` 前缀的 key（如 `attachment/...`） | `avatarKey` 保存成功，但 `avatarUrl` 返回空串 | ☐ |
@@ -70,8 +70,8 @@ X-Client-Version: 1.0.0            # 可选，最长 32
 | ID | 步骤 | 期望 | 结果 |
 |---|---|---|---|
 | E1 | 注册/登录 | `account_devices` 自动新增/更新该 `deviceId` | ☐ |
-| E2 | `GET /api/v1/devices` | 返回设备列表（平台、版本、最后活跃），不含推送 token | ☐ |
-| E3 | `DELETE /api/v1/devices/{deviceId}` | 该设备全部会话撤销，原 access 访问受保护接口 `code=1002` | ☐ |
+| E2 | `GET /biz-api/v1/devices` | 返回设备列表（平台、版本、最后活跃），不含推送 token | ☐ |
+| E3 | `DELETE /biz-api/v1/devices/{deviceId}` | 该设备全部会话撤销，原 access 访问受保护接口 `code=1002` | ☐ |
 | E4 | 删除不存在的 `deviceId` | `code=1004` | ☐ |
 | E5 | Web(5) 与 Windows(3) 同时在线 | 两设备并存，互不踢出 | ☐ |
 
@@ -79,22 +79,22 @@ X-Client-Version: 1.0.0            # 可选，最长 32
 
 | ID | 步骤 | 期望 | 结果 |
 |---|---|---|---|
-| F1 | `GET /api/v1/client-config` | `code=0`，含 `im.apiBaseUrl`/`im.wsUrl`、上传限制、功能开关 | ☐ |
+| F1 | `GET /biz-api/v1/client-config` | `code=0`，含 `im.apiBaseUrl`/`im.wsUrl`、上传限制、功能开关 | ☐ |
 | F2 | 记录 `ETag` 后带 `If-None-Match` 再次请求 | HTTP 304，无 body | ☐ |
-| F3 | `GET /api/v1/client-config/schema` | 返回字段元数据（类型、默认值、作用域） | ☐ |
+| F3 | `GET /biz-api/v1/client-config/schema` | 返回字段元数据（类型、默认值、作用域） | ☐ |
 | F4 | 清空 `client_configs` 表后请求 | 回退内置默认值，`code=0` 不报错 | ☐ |
 
 ## 6. 文件域（单文件 + 分片）
 
 | ID | 步骤 | 期望 | 结果 |
 |---|---|---|---|
-| G1 | `POST /api/v1/files/presign`，`purpose=avatar`、`image/png`、≤5MB | `code=0`，`uploadUrl` 可直接 PUT，`headers` 含 Content-Type，`expiresAt`≈15 分钟 | ☐ |
+| G1 | `POST /biz-api/v1/files/presign`，`purpose=avatar`、`image/png`、≤5MB | `code=0`，`uploadUrl` 可直接 PUT，`headers` 含 Content-Type，`expiresAt`≈15 分钟 | ☐ |
 | G2 | 按 G1 直传后再 `POST /files/{fileId}/complete` | `code=0`，`status=1`，回填真实大小与 MIME | ☐ |
 | G3 | 未上传对象直接 complete | `code=1001`（对象不存在或未完成） | ☐ |
 | G4 | 直传时把 Content-Type 改成 `text/plain` 再 complete | `code=1001` 类型不匹配 | ☐ |
 | G5 | avatar >5MB；attachment ≤8MB 走单文件接口、>8MB 走 `POST /files/multipart/presign` | 前者 `code=1001` 大小超限；后者提示 `ErrUseMultipart`，分片入口成功 | ☐ |
-| G6 | `GET /api/v1/files/{fileId}/url` | `code=0`，URL 可直接 GET，`expiresAt`≈15 分钟 | ☐ |
-| G7 | `DELETE /api/v1/files/{fileId}` | `code=0`，记录置 deleted；删除后再 `GET .../url` 返回 `code=1004` | ☐ |
+| G6 | `GET /biz-api/v1/files/{fileId}/url` | `code=0`，URL 可直接 GET，`expiresAt`≈15 分钟 | ☐ |
+| G7 | `DELETE /biz-api/v1/files/{fileId}` | `code=0`，记录置 deleted；删除后再 `GET .../url` 返回 `code=1004` | ☐ |
 | G8 | attachment 40MB 走 `POST /files/multipart/presign` | `partCount=5`、`partSize=8MB`、每片独立签名 URL | ☐ |
 | G9 | 逐片 PUT 后 `POST /files/{fileId}/multipart/complete`（带 ETag 列表） | `code=0`，`status=1`；分片数/序号不符返回 `code=1001` | ☐ |
 | G10 | 未完成时 `POST /files/{fileId}/multipart/parts` 刷新部分分片 | 已传分片保留，新 URL 可用 | ☐ |

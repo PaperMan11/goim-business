@@ -53,6 +53,9 @@ React Native / 桌面端可将同一个值存入各自的持久化存储（Async
 ## 4. 注册 / 登录示例
 
 ```js
+// 业务接口前缀为 /biz-api/v1；goim im-api 的 /api/v1 由 IM SDK 使用，二者不要混用。
+const API_BASE = `${BIZ_ORIGIN}/biz-api/v1`;
+
 const headers = {
   'Content-Type': 'application/json',
   'X-Device-Id': getDeviceId(),

@@ -26,7 +26,7 @@ func InitRoutes(r *gin.RouterGroup, a *app.App) {
 	authed.PUT("/password", ChangePassword(a))
 	authed.DELETE("", DeleteAccount(a))
 
-	// IM 凭证属于账号域：仍挂在 /api/v1/im，但由账号 handler 统一注册。
+	// IM 凭证属于账号域：挂在 /biz-api/v1/im，但由账号 handler 统一注册。
 	imRoute := r.Group("/im")
 	imRoute.Use(authenticator.Middleware())
 	imRoute.POST("/token", limiter.IMToken(), IMToken(a))

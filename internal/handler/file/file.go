@@ -11,7 +11,7 @@ import (
 	"goim-business/internal/types"
 )
 
-// Presign POST /api/v1/files/presign
+// Presign POST /biz-api/v1/files/presign
 func Presign(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var in types.FilePresignRequest
@@ -28,7 +28,7 @@ func Presign(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// MultipartPresign POST /api/v1/files/multipart/presign
+// MultipartPresign POST /biz-api/v1/files/multipart/presign
 func MultipartPresign(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var in types.MultipartPresignRequest
@@ -45,7 +45,7 @@ func MultipartPresign(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// RefreshMultipartParts POST /api/v1/files/:fileId/multipart/parts
+// RefreshMultipartParts POST /biz-api/v1/files/:fileId/multipart/parts
 func RefreshMultipartParts(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var in types.MultipartPartsRequest
@@ -62,7 +62,7 @@ func RefreshMultipartParts(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// MultipartComplete POST /api/v1/files/:fileId/multipart/complete
+// MultipartComplete POST /biz-api/v1/files/:fileId/multipart/complete
 func MultipartComplete(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var in types.MultipartCompleteRequest
@@ -79,7 +79,7 @@ func MultipartComplete(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// MultipartAbort POST /api/v1/files/:fileId/multipart/abort
+// MultipartAbort POST /biz-api/v1/files/:fileId/multipart/abort
 func MultipartAbort(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := a.FileService.MultipartAbort(c.Request.Context(), middlewares.UserIDFrom(c), c.Param("fileId")); err != nil {
@@ -90,7 +90,7 @@ func MultipartAbort(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// Complete POST /api/v1/files/:fileId/complete
+// Complete POST /biz-api/v1/files/:fileId/complete
 func Complete(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		view, err := a.FileService.Complete(c.Request.Context(), middlewares.UserIDFrom(c), c.Param("fileId"))
@@ -102,7 +102,7 @@ func Complete(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// URL GET /api/v1/files/:fileId/url
+// URL GET /biz-api/v1/files/:fileId/url
 func URL(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		result, err := a.FileService.URL(c.Request.Context(), middlewares.UserIDFrom(c), c.Param("fileId"))
@@ -114,7 +114,7 @@ func URL(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// Delete DELETE /api/v1/files/:fileId
+// Delete DELETE /biz-api/v1/files/:fileId
 func Delete(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := a.FileService.Delete(c.Request.Context(), middlewares.UserIDFrom(c), c.Param("fileId")); err != nil {

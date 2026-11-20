@@ -24,7 +24,7 @@ func TestOpenAPIAccountContract(t *testing.T) {
 	servers, ok := spec["servers"].([]any)
 	require.True(t, ok, "servers 必须是数组")
 	require.Len(t, servers, 1)
-	require.Equal(t, "/api/v1", mustMap(t, servers[0])["url"])
+	require.Equal(t, "/biz-api/v1", mustMap(t, servers[0])["url"])
 
 	paths := mustMap(t, spec["paths"])
 	require.Len(t, paths, 26, "只允许描述 26 条路径：账号 8、IM 3、资料 3、设备 2、配置 2、文件 8")

@@ -48,7 +48,7 @@
 | 能力 | 首版做法 | 为什么是核心 | 状态 |
 |---|---|---|---|
 | 账号与鉴权 | 自建 access JWT（默认 15 分钟）+ 不透明 refresh token（默认 30 天，轮换 + 重放检测） | goim 只有 24h access token，无 refresh；终端必须有自己的登录态 | ✅ 已实现 |
-| IM 凭证兑换 | `POST /api/v1/im/token`，服务端缓存 admin token 并向 goim 换取 user token | 不解决这一条，前端就只能继续内置 adminSecret，属于阻塞项 | ✅ 已实现（含 Web 客户端 `loginWithToken` 接入） |
+| IM 凭证兑换 | `POST /biz-api/v1/im/token`，服务端缓存 admin token 并向 goim 换取 user token | 不解决这一条，前端就只能继续内置 adminSecret，属于阻塞项 | ✅ 已实现（含 Web 客户端 `loginWithToken` 接入） |
 | IM 账号开通 | 注册后同步调用 goim `/user/user_register`，失败进入 outbox 补偿，也可通过 `/im/retry` 手动重试 | 没有 IM user 投影，资料/会话/推送都查不到人 | ✅ 已实现（开通 outbox ✅；资料变更同步 ✅） |
 | 用户资料（最小） | 昵称、头像 fileId、bio；MySQL 为事实源，goim 为投影 | 聊天界面必须显示昵称/头像 | ✅ 已实现（头像上传 `/files` 与公开 `avatarUrl` 已就绪） |
 | 设备注册 | deviceID、平台、版本、最后活跃；支撑多端会话与踢出 | 多端登录是 Web + 桌面的现实场景 | ✅ 已实现（`account_devices`，移除设备即踢出该设备会话） |
@@ -100,7 +100,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
   └─ 文件上传：/third/* 预签名 → 直传 RustFS
 ```
 
-**当前已可用的前半段**：客户端调用 `POST /api/v1/account/register|login|refresh` 获得业务 access token，再调用 `POST /api/v1/im/token` 兑换 IM token（✅）；Web 客户端已改为业务账号登录 + `LoginWithToken`，并在 IM token 到期前自动续期（✅ 代码层闭环，端到端联调待环境）。
+**当前已可用的前半段**：客户端调用 `POST /biz-api/v1/account/register|login|refresh` 获得业务 access token，再调用 `POST /biz-api/v1/im/token` 兑换 IM token（✅）；Web 客户端已改为业务账号登录 + `LoginWithToken`，并在 IM token 到期前自动续期（✅ 代码层闭环，端到端联调待环境）。
 
 ### 2.2 职责边界（明确做/不做）
 
@@ -164,11 +164,11 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
                     ┌───────────────┐
    Web / 桌面 / App │  Nginx / GW   │  统一入口，按路径分流
                     └───┬───────┬───┘
-        /api/v1/account │       │ /api/v1/auth|user|msg|conversation|third
-        /api/v1/profile │       │ /ws
-        /api/v1/im      ▼       ▼
-        /api/v1/files  ┌──────────────┐      ┌──────────────┐
-        /api/v1/admin  │ goim-business│      │   im-api     │
+        /biz-api/v1/account │   │ /api/v1/auth|user|msg|conversation|third
+        /biz-api/v1/profile │   │ /ws
+        /biz-api/v1/im      ▼   ▼
+        /biz-api/v1/files  ┌──────────────┐      ┌──────────────┐
+        /biz-api/v1/admin  │ goim-business│      │   im-api     │
                        │  (本服务)    │─────▶│  (18880)     │
                        └──┬───┬───┬───┘      └──┬───────────┘
                           │   │   │             │ gRPC/Etcd
@@ -179,7 +179,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 ```
 
 - **API 与 cron 分进程、同镜像**：`cmd/api` 只提供 HTTP 服务，`cmd/cron` 只运行定时任务（当前为 IM 开通 outbox 补偿）；两者共用同一镜像与配置，部署时用不同 command 启动，可各自独立扩缩容。cron 使用 `robfig/cron/v3` 的 `@every` 调度，并用 `internal/pkg/lock` 的 Redis 分布式锁保证同一时刻只有一个实例执行；`im.base_url` 为空时 cron 打印日志后正常退出；其余 worker 为规划项 ⏳。
-- **路径隔离**：业务命名空间与 SDK 占用路径不重叠，因此 `BaseURL` 仍可保持 `/api/v1`，无需改 SDK 常量。
+- **路径隔离**：goim SDK 与 im-api 占用 `/api/v1`，业务接口统一使用 `/biz-api/v1`，网关可按前缀分流，无需改 SDK 常量。
 - **无状态**：会话状态在 MySQL + Redis，实例可水平扩容。
 
 ### 3.2 实际请求处理链（✅ 已实现）
@@ -193,7 +193,7 @@ gin.New()
   → Metrics
   → CORS
   → MaxBytesReader（server.max_body_bytes > 0 时）
-  → /api/v1 路由组
+  → /biz-api/v1 路由组
        ├─ POST /account/register → RateLimit.Register → Handler
        ├─ POST /account/login    → RateLimit.Login    → Handler
        ├─ POST /account/refresh  → Handler
@@ -209,7 +209,7 @@ gin.New()
 
 | Server | 地址配置 | 默认端口 | 用途 |
 |---|---|---|---|
-| API | `server.http_addr` | 18180 | `/api/v1` 业务接口 |
+| API | `server.http_addr` | 18180 | `/biz-api/v1` 业务接口 |
 | Probe | `server.probe_addr` | 18181 | `/healthz`、`/readyz` |
 | Metrics | `server.metrics_addr` | 19191 | `/metrics`（Prometheus 抓取） |
 
@@ -411,9 +411,9 @@ refresh 规则（✅ 已实现）：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/v1/im/token` | 平台取自 access token claims 的 `pid`，请求体为空；额外受 IP 限流 |
-| GET | `/api/v1/im/status` | 返回 IM 开通状态 |
-| POST | `/api/v1/im/retry` | 重新开通后返回与 status 相同的结构；额外受 IP 限流 |
+| POST | `/biz-api/v1/im/token` | 平台取自 access token claims 的 `pid`，请求体为空；额外受 IP 限流 |
+| GET | `/biz-api/v1/im/status` | 返回 IM 开通状态 |
+| POST | `/biz-api/v1/im/retry` | 重新开通后返回与 status 相同的结构；额外受 IP 限流 |
 
 `POST /im/token` 实际响应（`types.IMTokenResp`）：
 
@@ -730,7 +730,7 @@ goim-business/
 │   │   └── errors.go
 │   ├── domain/clientconfig/        # 客户端配置实体与仓储端口
 │   ├── handler/
-│   │   ├── routes.go               # gin.New + 全局中间件 + /api/v1
+│   │   ├── routes.go               # gin.New + 全局中间件 + /biz-api/v1
 │   │   ├── account/
 │   │   │   ├── routes.go           # 账号、IM、资料与设备路由注册
 │   │   │   ├── account.go          # 7 个账号 handler
@@ -792,7 +792,7 @@ goim-business/
 
 ### 5.2 一次完整请求的中间件处理链（✅）
 
-以 `POST /api/v1/account/login` 为例：
+以 `POST /biz-api/v1/account/login` 为例：
 
 1. `gin.New()`（不启用 gin 默认 Logger/Recovery），`SetTrustedProxies(server.trusted_proxies)`。
 2. `Recovery`：注册 defer，捕获 panic 并记录截断堆栈。
@@ -801,12 +801,12 @@ goim-business/
 5. `Metrics`：开始计时，结束后累加 requests counter 与 duration histogram。
 6. `CORS`：按白名单回显 Origin；OPTIONS 直接 204。
 7. `MaxBytesReader`：按 `server.max_body_bytes` 限制请求体。
-8. 进入 `/api/v1/account` 组，命中 `RateLimit.Login()`：以 `c.ClientIP()` 为键做 Redis 固定窗口计数；失败关闭。
+8. 进入 `/biz-api/v1/account` 组，命中 `RateLimit.Login()`：以 `c.ClientIP()` 为键做 Redis 固定窗口计数；失败关闭。
 9. `httpx.BindJSON` 绑定 `types.LoginRequest`（`loginName/password`）；`httpx.PlatformFrom` 解析 `X-Client-Platform`（缺省 Web），`httpx.DeviceIDFrom` 解析必填的 `X-Device-Id`，`httpx.ClientVersionFrom` 解析可选的 `X-Client-Version`，并补充标准 `User-Agent`、`IP`。
 10. `AccountService.Login`：读取登录失败计数 → 查用户/凭证 → argon2id 校验 → 清零失败计数 → 事务内更新 `last_login_at`、创建会话并 upsert `account_devices`（设备随登录自动登记）→ 会话上限踢出 → 签发 access/refresh → 写 Redis 活跃标记。
 11. `response.OK` 输出 HTTP 200 + `{code:0,msg:"success",data:{user,token,refreshToken,refreshExpiresIn,sessionId,platform}}`；请求返回时由 Metrics 与 AccessLog 收尾。
 
-认证请求（如 `POST /api/v1/account/logout`）在路由组内额外经过 `Authenticator`：验签 → 校验 Redis `sess:active:{sid}` → 注入用户/会话上下文。
+认证请求（如 `POST /biz-api/v1/account/logout`）在路由组内额外经过 `Authenticator`：验签 → 校验 Redis `sess:active:{sid}` → 注入用户/会话上下文。
 
 ### 5.3 目标目录结构（蓝图，⏳ 未落地部分）
 
@@ -1035,7 +1035,7 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 
 ## 8. 关键接口分组
 
-统一前缀 `/api/v1`；业务响应体 `{code,msg,data}`，`X-Request-ID` 回写。
+业务接口统一前缀 `/biz-api/v1`（goim 的 `/api/v1` 保留给 IM SDK）；业务响应体 `{code,msg,data}`，`X-Request-ID` 回写。
 
 鉴权标记：🔓 公开、🔐 用户 access token、🛡 管理员 token、🖥 内部/探针。
 
@@ -1227,7 +1227,7 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 
 这些 B 档路径统一使用**不与 goim 重叠的命名**（`conversation-ext`、`message-archive`、`push`、`report`），确保未来转正时客户端无需改路径。当前这些路由**一律未注册**。
 
-### 8.10 内部（✅ 独立端口，不在 `/api/v1`）
+### 8.10 内部（✅ 独立端口，不在 `/biz-api/v1`）
 
 | 方法 | 路径 | 端口 | 说明 | 状态 |
 |---|---|---|---|---|
@@ -1244,7 +1244,7 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 当前实际流程：
 
 ```
-client → POST /api/v1/account/register（X-Client-Platform 可选；X-Device-Id 必填；X-Client-Version 可选）
+client → POST /biz-api/v1/account/register（X-Client-Platform 可选；X-Device-Id 必填；X-Client-Version 可选）
   handler:
     1. BindJSON + PlatformFrom + DeviceIDFrom + ClientVersionFrom + 注入标准 User-Agent/IP
   service:
@@ -1274,7 +1274,7 @@ client → POST /im/token → LoginWithToken
 ### 9.2 令牌刷新（✅ 已实现）
 
 ```
-client → POST /api/v1/account/refresh {refreshToken}
+client → POST /biz-api/v1/account/refresh {refreshToken}
   service:
     1. sha256(refreshToken) → 查 account_sessions.refresh_hash
     2. rotated_at 非空 → 判定重放 → 撤销整个 family（2005）
@@ -1424,7 +1424,7 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 
 #### 注销链路
 
-1. `DELETE /api/v1/account`（Bearer 鉴权）：
+1. `DELETE /biz-api/v1/account`（Bearer 鉴权）：
    - 事务内 `MarkDeleting(userID, purgeAt)`：`WHERE status=1` 置 `3` 并写 `purge_at = now + deletion_cooldown`；条件更新失败返回冲突，重复注销幂等。同一事务 `Enqueue(userID, "purge_im_user", "{}")`。
    - 提交后：`RevokeAll(userID, now, 0)` 逐个 `Deactivate(sid)`，删除 IM token 缓存（覆盖全部平台编码含 HarmonyOS 11，直接 DEL，不使用 SCAN），返回 `{ "purgeAt": "..." }`。
    - 尽力即时同步：`imSync.Purge(ctx, user)`（不按 `im_status` 跳过，IM 用户不存在视为成功），成功/失败按入队返回的任务 ID `Settle`；失败不影响接口成功。

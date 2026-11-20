@@ -11,7 +11,7 @@ import (
 	"goim-business/internal/pkg/response"
 )
 
-// Config GET /api/v1/client-config?platform=5
+// Config GET /biz-api/v1/client-config?platform=5
 func Config(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		raw := c.Query("platform")
@@ -43,7 +43,7 @@ func Config(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// Schema GET /api/v1/client-config/schema
+// Schema GET /biz-api/v1/client-config/schema
 func Schema(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		response.OK(c, a.ClientConfigService.Schema())

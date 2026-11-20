@@ -2678,7 +2678,7 @@
   },
   "servers": [
     {
-      "url": "/api/v1"
+      "url": "/biz-api/v1"
     }
   ],
   "tags": [

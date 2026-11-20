@@ -31,7 +31,7 @@ tags:
     description: 文件直传签名、完成校验、访问地址与删除（客户端直传对象存储）
 
 servers:
-  - url: /api/v1
+  - url: /biz-api/v1
 
 paths:
   /account/register:

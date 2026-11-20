@@ -12,7 +12,7 @@ import (
 	"goim-business/internal/types"
 )
 
-// Profile GET /api/v1/profile/me
+// Profile GET /biz-api/v1/profile/me
 func Profile(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		view, err := a.AccountService.Profile(c.Request.Context(), middlewares.UserIDFrom(c))
@@ -24,7 +24,7 @@ func Profile(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// UpdateProfile PUT /api/v1/profile/me
+// UpdateProfile PUT /biz-api/v1/profile/me
 func UpdateProfile(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var in types.UpdateProfileRequest
@@ -41,7 +41,7 @@ func UpdateProfile(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// BatchProfiles POST /api/v1/profile/batch
+// BatchProfiles POST /biz-api/v1/profile/batch
 func BatchProfiles(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var in types.BatchProfilesRequest
@@ -67,7 +67,7 @@ func BatchProfiles(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// PublicProfile GET /api/v1/profile/users/:userId
+// PublicProfile GET /biz-api/v1/profile/users/:userId
 func PublicProfile(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := convert.ToInt64(c.Param("userId"))

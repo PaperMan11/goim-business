@@ -13,7 +13,7 @@ import (
 	"goim-business/internal/types"
 )
 
-// Register POST /api/v1/account/register
+// Register POST /biz-api/v1/account/register
 func Register(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var in types.RegisterRequest
@@ -51,7 +51,7 @@ func Register(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// Login POST /api/v1/account/login
+// Login POST /biz-api/v1/account/login
 func Login(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var in types.LoginRequest
@@ -89,7 +89,7 @@ func Login(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// Refresh POST /api/v1/account/refresh
+// Refresh POST /biz-api/v1/account/refresh
 func Refresh(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var in types.RefreshRequest
@@ -109,7 +109,7 @@ func Refresh(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// Logout POST /api/v1/account/logout
+// Logout POST /biz-api/v1/account/logout
 func Logout(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := a.AccountService.Logout(c.Request.Context(), middlewares.UserIDFrom(c), middlewares.SessionIDFrom(c)); err != nil {
@@ -120,7 +120,7 @@ func Logout(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// Sessions GET /api/v1/account/sessions
+// Sessions GET /biz-api/v1/account/sessions
 func Sessions(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		views, err := a.AccountService.Sessions(c.Request.Context(), middlewares.UserIDFrom(c), middlewares.SessionIDFrom(c))
@@ -132,7 +132,7 @@ func Sessions(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// RevokeSession POST /api/v1/account/sessions/revoke
+// RevokeSession POST /biz-api/v1/account/sessions/revoke
 func RevokeSession(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var in types.RevokeSessionRequest
@@ -153,7 +153,7 @@ func RevokeSession(a *app.App) gin.HandlerFunc {
 	}
 }
 
-// ChangePassword PUT /api/v1/account/password
+// ChangePassword PUT /biz-api/v1/account/password
 func ChangePassword(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var in types.ChangePasswordRequest

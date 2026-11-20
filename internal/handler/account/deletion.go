@@ -8,7 +8,7 @@ import (
 	"goim-business/internal/pkg/response"
 )
 
-// DeleteAccount DELETE /api/v1/account
+// DeleteAccount DELETE /biz-api/v1/account
 func DeleteAccount(a *app.App) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		result, err := a.AccountService.DeleteAccount(c.Request.Context(), middlewares.UserIDFrom(c))

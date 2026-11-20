@@ -3,7 +3,7 @@
 goim 业务中台服务：账号与登录态、IM 凭证换发、用户资料、设备管理、客户端配置，以及基于 RustFS / S3 兼容存储的文件上传。
 
 - 语言与框架：Go 1.24、Gin、MySQL、Redis、AWS SDK v2（S3 协议）
-- 对外接口：`/api/v1`，OpenAPI 描述见 [api/openapi.yaml](api/openapi.yaml)
+- 对外接口：`/biz-api/v1`（goim im-api 占用 `/api/v1`，业务接口使用独立前缀），OpenAPI 描述见 [api/openapi.yaml](api/openapi.yaml)
 - 对接 IM：goim `im-api`（开通账号、同步资料、换发 IM token），异步失败通过 outbox 补偿
 
 ## 功能

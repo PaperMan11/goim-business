@@ -75,11 +75,11 @@ api() {
     curl "${args[@]}" "$BASE_URL$path"
 }
 
-echo "注册账号: $LOGIN_NAME -> $BASE_URL/api/v1/account/register"
+echo "注册账号: $LOGIN_NAME -> $BASE_URL/biz-api/v1/account/register"
 payload=$(printf '{"loginName":"%s","password":"%s","nickname":"%s"}' \
     "$(json_escape "$LOGIN_NAME")" "$(json_escape "$PASSWORD")" "$(json_escape "$NICKNAME")")
 
-if ! resp=$(api POST /api/v1/account/register "" "$payload"); then
+if ! resp=$(api POST /biz-api/v1/account/register "" "$payload"); then
     echo "注册请求失败：无法连接 $BASE_URL" >&2
     exit 2
 fi
@@ -101,7 +101,7 @@ if [[ "$SKIP_IM_CHECK" -eq 1 ]]; then
     exit 0
 fi
 
-if ! status_resp=$(api GET /api/v1/im/status "$access"); then
+if ! status_resp=$(api GET /biz-api/v1/im/status "$access"); then
     echo "IM 状态查询失败：请求未完成" >&2
     exit 2
 fi
@@ -115,11 +115,11 @@ fi
 im_status=$(json_number "$status_resp" status)
 echo "IM 开通状态: status=$im_status syncedAt=$(json_string "$status_resp" syncedAt)"
 if [[ "$im_status" != "1" ]]; then
-    echo "IM 尚未就绪，可稍后调用 POST /api/v1/im/retry 或等待 cron 补偿" >&2
+    echo "IM 尚未就绪，可稍后调用 POST /biz-api/v1/im/retry 或等待 cron 补偿" >&2
     exit 0
 fi
 
-if ! token_resp=$(api POST /api/v1/im/token "$access"); then
+if ! token_resp=$(api POST /biz-api/v1/im/token "$access"); then
     echo "IM token 兑换失败：请求未完成" >&2
     exit 2
 fi
