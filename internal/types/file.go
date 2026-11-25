@@ -4,11 +4,13 @@ import "time"
 
 // FilePresignRequest 是申请文件直传的请求。
 type FilePresignRequest struct {
-	Purpose  string `json:"purpose" binding:"required,max=32"`
-	FileName string `json:"fileName" binding:"max=255"`
-	MIME     string `json:"mime" binding:"required,max=128"`
-	Size     int64  `json:"size" binding:"required,min=1"`
-	SHA256   string `json:"sha256" binding:"omitempty,len=64"`
+	Purpose string `json:"purpose" binding:"required,max=32"`
+	// ConversationID 是聊天资源绑定的会话；chat_image/chat_file 必填，其他用途必须为空。
+	ConversationID string `json:"conversationId" binding:"max=64"`
+	FileName       string `json:"fileName" binding:"max=255"`
+	MIME           string `json:"mime" binding:"required,max=128"`
+	Size           int64  `json:"size" binding:"required,min=1"`
+	SHA256         string `json:"sha256" binding:"omitempty,len=64"`
 }
 
 // FilePresignResp 是申请上传的响应；客户端按 method + uploadUrl + headers 直传对象存储。
@@ -23,13 +25,16 @@ type FilePresignResp struct {
 
 // FileView 是对外暴露的文件元数据。
 type FileView struct {
-	FileID    string    `json:"fileId"`
-	Purpose   string    `json:"purpose"`
-	ObjectKey string    `json:"objectKey"`
-	MIME      string    `json:"mime"`
-	Size      int64     `json:"size"`
-	SHA256    string    `json:"sha256"`
-	Status    int8      `json:"status"`
+	FileID    string `json:"fileId"`
+	Purpose   string `json:"purpose"`
+	ObjectKey string `json:"objectKey"`
+	MIME      string `json:"mime"`
+	Size      int64  `json:"size"`
+	SHA256    string `json:"sha256"`
+	Status    int8   `json:"status"`
+	// URL 仅 avatar 在 ready 后返回稳定公开地址；
+	// chat_image/chat_file/attachment 均为空，需调用 GET /files/{fileId}/url 现签。
+	URL       string    `json:"url"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -39,13 +44,15 @@ type FileURLResp struct {
 	ExpiresAt int64  `json:"expiresAt"`
 }
 
-// MultipartPresignRequest 是申请分片上传的请求；当前仅 attachment 用途支持。
+// MultipartPresignRequest 是申请分片上传的请求；attachment 与 chat_file 用途支持。
 type MultipartPresignRequest struct {
-	Purpose  string `json:"purpose" binding:"required,max=32"`
-	FileName string `json:"fileName" binding:"max=255"`
-	MIME     string `json:"mime" binding:"required,max=128"`
-	Size     int64  `json:"size" binding:"required,min=1"`
-	SHA256   string `json:"sha256" binding:"omitempty,len=64"`
+	Purpose string `json:"purpose" binding:"required,max=32"`
+	// ConversationID 是聊天资源绑定的会话；chat_file 必填，attachment 必须为空。
+	ConversationID string `json:"conversationId" binding:"max=64"`
+	FileName       string `json:"fileName" binding:"max=255"`
+	MIME           string `json:"mime" binding:"required,max=128"`
+	Size           int64  `json:"size" binding:"required,min=1"`
+	SHA256         string `json:"sha256" binding:"omitempty,len=64"`
 }
 
 // MultipartPartPresign 是单个分片的上传信息。

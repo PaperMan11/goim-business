@@ -11,17 +11,18 @@ const (
 
 // FileObject 是文件元数据记录；对象本体存放在 RustFS/S3 bucket 中。
 type FileObject struct {
-	ID        int64      `gorm:"column:id;primaryKey;autoIncrement"`
-	UserID    int64      `gorm:"column:user_id"`
-	Purpose   string     `gorm:"column:purpose;size:32"`
-	ObjectKey string     `gorm:"column:object_key;size:512"`
-	FileName  string     `gorm:"column:file_name;size:255"`
-	MIME      string     `gorm:"column:mime;size:128"`
-	Size      int64      `gorm:"column:size"`
-	SHA256    string     `gorm:"column:sha256;size:64"`
-	UploadID  string     `gorm:"column:upload_id;size:128"`
-	Status    int8       `gorm:"column:status"`
-	ExpiresAt *time.Time `gorm:"column:expires_at"`
+	ID             int64      `gorm:"column:id;primaryKey;autoIncrement"`
+	UserID         int64      `gorm:"column:user_id"`
+	Purpose        string     `gorm:"column:purpose;size:32"`
+	ConversationID string     `gorm:"column:conversation_id;size:64"`
+	ObjectKey      string     `gorm:"column:object_key;size:512"`
+	FileName       string     `gorm:"column:file_name;size:255"`
+	MIME           string     `gorm:"column:mime;size:128"`
+	Size           int64      `gorm:"column:size"`
+	SHA256         string     `gorm:"column:sha256;size:64"`
+	UploadID       string     `gorm:"column:upload_id;size:128"`
+	Status         int8       `gorm:"column:status"`
+	ExpiresAt      *time.Time `gorm:"column:expires_at"`
 	// ObjectDeletedAt 是对象回收完成时间；nil 表示 status=2 但对象尚未确认删除。
 	ObjectDeletedAt *time.Time `gorm:"column:object_deleted_at"`
 	CreatedAt       time.Time  `gorm:"column:created_at"`

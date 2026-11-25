@@ -5,7 +5,6 @@ package app
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	imadapter "goim-business/internal/adapter/im"
 	"goim-business/internal/cache"
 	"goim-business/internal/client/goim"
 	"goim-business/internal/config"
@@ -32,7 +32,6 @@ import (
 	"goim-business/internal/service/account"
 	clientconfigsvc "goim-business/internal/service/clientconfig"
 	filesvc "goim-business/internal/service/file"
-	"goim-business/internal/service/ports"
 )
 
 // App 是进程级应用容器：持有配置、基础设施连接与业务服务。
@@ -151,6 +150,7 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		lock.WithRetryStrategy(lock.ExponentialBackoff(50*time.Millisecond, 500*time.Millisecond)),
 		lock.WithMaxRetries(5),
 	)
+	imAdapter := imadapter.NewClient(a.IM)
 
 	a.AccountService = account.NewService(
 		a.Users,
@@ -160,10 +160,10 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		a.Tx,
 		a.SessionCache,
 		a.SessionCache,
-		imClient{client: a.IM},
+		imAdapter,
 		a.IMTokenCache,
 		a.Outbox,
-		imjob.NewWorker(a.Users, imClient{client: a.IM}, a.Outbox, cfg.IM.OutboxBatchSize, timex.Now, log.Sugar(),
+		imjob.NewWorker(a.Users, imAdapter, a.Outbox, cfg.IM.OutboxBatchSize, timex.Now, log.Sugar(),
 			imjob.WithAvatarURL(avatarURL),
 			imjob.WithUserLock(imLocker, imjob.UserLockKeyPrefix(keyPrefix)),
 		),
@@ -213,45 +213,12 @@ func NewApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*App, err
 		filesvc.Config{
 			PresignExpire:          cfg.Storage.PresignExpire,
 			MultipartPresignExpire: cfg.Storage.MultipartPresignExpire,
+			PublicObjectURL:        cfg.Storage.PublicObjectURL,
+			GroupMembers:           imadapter.NewGroupMembers(a.IM, cache.NewGroupMemberCache(a.Redis, a.KeyPrefix)),
 		},
 		log.Sugar(),
 	)
 	return a, nil
-}
-
-// imClient 把 goim 客户端适配为账号域的 IM 端口。
-type imClient struct {
-	client *goim.Client
-}
-
-// Enabled 表示 IM 是否已配置。
-func (c imClient) Enabled() bool { return c.client.Enabled() }
-
-// RegisterUser 在 IM 侧开通用户。
-func (c imClient) RegisterUser(ctx context.Context, userID, nickname, avatarURL string) error {
-	err := c.client.RegisterUser(ctx, goim.UserInfo{UserID: userID, Nickname: nickname, AvatarURL: avatarURL})
-	if errors.Is(err, goim.ErrUserAlreadyExists) {
-		return ports.ErrIMUserAlreadyExists
-	}
-	return err
-}
-
-// UpdateUserInfo 把昵称与头像同步到 IM。
-func (c imClient) UpdateUserInfo(ctx context.Context, userID, nickname, avatarURL string) error {
-	err := c.client.UpdateUserInfo(ctx, goim.UserInfo{UserID: userID, Nickname: nickname, AvatarURL: avatarURL})
-	if errors.Is(err, goim.ErrUserNotFound) {
-		return ports.ErrIMUserNotFound
-	}
-	return err
-}
-
-// UserToken 为指定用户与平台兑换 IM token。
-func (c imClient) UserToken(ctx context.Context, userID string, platformID int) (*ports.IMToken, error) {
-	tok, err := c.client.UserToken(ctx, userID, platformID)
-	if err != nil {
-		return nil, err
-	}
-	return &ports.IMToken{Value: tok.Value, ExpireAt: tok.ExpireAt}, nil
 }
 
 // Close 释放连接资源。

@@ -53,7 +53,7 @@
 | 用户资料（最小） | 昵称、头像 fileId、bio；MySQL 为事实源，goim 为投影 | 聊天界面必须显示昵称/头像 | ✅ 已实现（头像上传 `/files` 与公开 `avatarUrl` 已就绪） |
 | 设备注册 | deviceID、平台、版本、最后活跃；支撑多端会话与踢出 | 多端登录是 Web + 桌面的现实场景 | ✅ 已实现（`account_devices`，移除设备即踢出该设备会话） |
 | 客户端配置 | IM 地址、平台映射、上传限制、功能开关；版本 + ETag | 客户端换环境/开关不能靠重新发版 | ✅ 已实现（`client_configs` + ETag/304；配置表缺失回退内置默认值） |
-| 文件（头像 + 附件） | 复用 RustFS：单文件 PUT + 分片上传 + 现签 GET；公开资源统一 `public/` 命名空间 | 头像走单文件并直接使用公开 URL；业务附件走分片；聊天附件仍走 goim `/third/*` | ✅ 已实现（孤儿与删除态对象回收 ✅） |
+| 文件（头像 + 附件 + 聊天资源） | 复用 RustFS：单文件 PUT + 分片上传 + 现签 GET；公开资源统一 `public/` 命名空间 | 头像走单文件并直接使用公开 URL；业务附件走分片；聊天图片/文件走 `chat_image`、`chat_file`，绑定会话且仅会话成员可兑换短时 URL | ✅ 已实现（孤儿与删除态对象回收 ✅） |
 | 可观测与交付 | 日志、request_id、Prometheus、健康检查、迁移、单测、compose、CI、镜像、优雅启停 | 上线门槛，不属于业务功能但不能省 | ✅ 已实现（详见 §4.11~§4.13） |
 
 ### 1.4 只定义契约、首版不实现
@@ -97,7 +97,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
   ├─ 收发消息：WS 1001/1002/1003 + 2001 推送
   ├─ 会话列表：HTTP /conversation/get_all_conversations
   ├─ 历史消息：本地 SQLite/IndexedDB + /msg/pull_msg_by_seq
-  └─ 文件上传：/third/* 预签名 → 直传 RustFS
+  └─ 文件上传：biz /files/presign 或 /files/multipart/presign → 直传 RustFS
 ```
 
 **当前已可用的前半段**：客户端调用 `POST /biz-api/v1/account/register|login|refresh` 获得业务 access token，再调用 `POST /biz-api/v1/im/token` 兑换 IM token（✅）；Web 客户端已改为业务账号登录 + `LoginWithToken`，并在 IM token 到期前自动续期（✅ 代码层闭环，端到端联调待环境）。
@@ -121,7 +121,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 1. **IM 账号开通器（User Provisioning）**（✅）：注册后同步 goim user，失败可重试，状态可查询。**业务 userID 即 IM userID**，开通时原样写入，不生成第二套 ID。当前已写入 `account_users.im_status/im_synced_at`；注册事务内同时写通用 `outbox_events`，独立 `cmd/cron` 进程按退避策略补偿（✅）；注销同步（`purge_im_user`，placeholder 模式）✅。
 2. **IM Token Broker**（✅）：admin token 缓存、按 `(userID, platformID)` 复用 user token、IP 限频。
 3. **设备注册表**（⏳）：deviceID、平台、版本、推送 token、最后活跃时间；支撑多端踢出与推送。当前会话表已记录 `device_id`，但没有独立设备表。
-4. **业务文件资产**（⏳）：首版只做头像；后续扩展反馈截图、后台素材的对象 key、配额、审计；与聊天附件分桶/分前缀。
+4. **业务文件资产**（✅）：头像、聊天图片、聊天文件与业务附件已实现；聊天资源统一走 biz 并绑定 `conversationId`，仅会话成员可换 URL，不再回退 goim `/third/*`；后续扩展反馈截图、后台素材、配额与审计。
 5. **配置中心**（⏳）：客户端配置、功能开关、IM 地址与平台映射，版本化下发。
 6. **审计日志**（⏳）：管理端写操作留痕（谁、何时、对谁、做了什么、request_id）；B 档转正时启用。
 7. **账号生命周期**（✅ 注销 / ⏳ 冻结解冻与导出）：`DELETE /account` 注销后立即下线并同步 IM，冷却期（默认 15 天）结束后由 `account_purge` 任务物理清除资料、凭证、会话与设备，并把文件置为删除交由清理任务回收；冻结登录检查已实现，解冻与数据导出仍 ⏳。
@@ -665,14 +665,14 @@ CREATE TABLE outbox_events (
 
 **结论：复用现有 RustFS（S3 兼容），业务资产独立 bucket；AWS SDK v2 直接预签名，不经过 goim。**
 
-- 聊天附件继续走 goim `/third/*`（SDK 已封装）。
-- 业务资产（首版头像；后续反馈截图、后台素材）走 `goim-business` 自己的 bucket `goim-business`；所有公开资源统一放在 `public/` 命名空间下（如 `public/avatar/`），私有资源沿用各自用途前缀（如 `attachment/`）。
-- 流程：`POST /files/presign` 返回 PUT URL（15 分钟）→ 客户端直传 → `POST /files/complete` 后服务端 `HeadObject` 校验大小/类型 → 落 `file_objects` → 附件展示时 `GET /files/{id}/url` 现签 GET URL，头像直接使用公开 `avatarUrl`。
-- 安全：附件保持私有桶；仅 `public/` 命名空间由 bucket policy 或 Nginx 开放匿名 GET，其他前缀一律只允许预签名访问；AccessKey/SecretKey 只在环境变量；预签名锁 Content-Type 与大小；对象 key 统一由 `domain.BuildObjectKey` 生成，禁止客户端指定任意 key；文件名不参与路径。
-- 清理：定时任务删除 `status=uploading` 超 24h 的孤儿对象；软删文件延迟 7 天物理删除。
+- 聊天资源（图片、语音、视频、文件）统一走业务侧 `purpose=chat_image` / `purpose=chat_file`，不再使用 goim `/third/*`；上传时必须绑定 `conversationId`，对象为私有 key，仅单聊双方或当前群成员可换取短时 GET URL。
+- 业务资产（首版头像，聊天图片、聊天文件、后续反馈截图、后台素材）走 `goim-business` 自己的 bucket `goim-business`；仅头像放在 `public/avatar/` 公开命名空间，聊天资源与附件均使用私有用途前缀（`chat_image/`、`chat_file/`、`attachment/`）。
+- 流程：`POST /files/presign` 返回 PUT URL（15 分钟）→ 客户端直传 → `POST /files/complete` 后服务端 `HeadObject` 校验大小/类型 → 落 `file_objects` → 头像直接使用 complete 返回的稳定公开 `url`；聊天资源与附件在渲染/下载前调用 `GET /files/{id}/url` 现签，聊天资源按会话成员鉴权。
+- 安全：附件与聊天资源保持私有桶；仅 `public/` 命名空间由 bucket policy 或 Nginx 开放匿名 GET，其他前缀一律只允许预签名访问；公开与否由 `purpose` 在服务端固定映射，客户端不能指定；AccessKey/SecretKey 只在环境变量；预签名锁 Content-Type 与大小；对象 key 统一由 `domain.BuildObjectKey` 生成，禁止客户端指定任意 key；文件名不参与路径；聊天资源每次访问均校验会话成员，已发出的短时 URL 最长存活 15 分钟。
+- 清理：定时任务删除 `status=pending` 超 24h 的孤儿对象；软删文件延迟 7 天物理删除。
 - CDN 后置：先由 Nginx 反代 RustFS；量起来后再上 CDN + 签名回源。
 
-已落地部分（✅）：`storage` 配置段（`etc/base.yaml`，密钥走 `GOIM_BIZ_STORAGE__SECRET_KEY`）、AWS SDK v2 依赖与 `internal/pkg/storage/s3` 适配层、`file_objects` 元数据表（migration `000005`）。文件 HTTP 接口与清理任务尚未注册（⏳）。
+已落地部分（✅）：`storage` 配置段（`etc/base.yaml`，密钥走 `GOIM_BIZ_STORAGE__SECRET_KEY`）、AWS SDK v2 依赖与 `internal/pkg/storage/s3` 适配层、`file_objects` 元数据表（migration `000005`、`000006` 增加会话绑定），文件 HTTP 接口与清理任务均已注册。
 
 ### 4.16 推送通道选型（⏳ 规划中，不实现）
 
@@ -708,6 +708,7 @@ goim-business/
 │   ├── 000003_account_devices.up.sql # 设备登记表（+ down）
 │   ├── 000004_account_client_configs.up.sql  # 客户端配置表（+ down）
 │   ├── 000005_file_objects.up.sql  # 文件对象元数据表（+ down）
+│   ├── 000006_file_conversation.up.sql  # 聊天资源绑定会话（+ down）
 │   └── embed.go                    # embed.FS
 ├── api/
 │   ├── openapi.yaml                # 账号/IM/资料/设备/配置/文件 OpenAPI 3.0.3 契约
@@ -960,23 +961,25 @@ CREATE TABLE devices (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 ```
 
-### 7.5 `file_objects`（⏳ 规划中，未建表）
+### 7.5 `file_objects`（✅ 已建表，migration `000005` + `000006`）
 
 ```sql
 CREATE TABLE file_objects (
-  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  owner_user_id BIGINT UNSIGNED NOT NULL,
-  purpose       VARCHAR(32)  NOT NULL,      -- avatar/feedback/admin
-  bucket        VARCHAR(64)  NOT NULL,
-  object_key    VARCHAR(255) NOT NULL,
-  mime          VARCHAR(128) NOT NULL,
-  size_bytes    BIGINT       NOT NULL DEFAULT 0,
-  sha256        CHAR(64)     NOT NULL DEFAULT '',
-  status        TINYINT      NOT NULL DEFAULT 0, -- 0待上传 1就绪 2已删除
-  created_at    DATETIME(3)  NOT NULL,
+  id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  owner_user_id   BIGINT UNSIGNED NOT NULL,
+  purpose         VARCHAR(32)  NOT NULL,      -- avatar/chat_image/chat_file/attachment
+  conversation_id VARCHAR(64)  NOT NULL DEFAULT '', -- 聊天资源绑定的会话；avatar/attachment 为空
+  bucket          VARCHAR(64)  NOT NULL,
+  object_key      VARCHAR(255) NOT NULL,
+  mime            VARCHAR(128) NOT NULL,
+  size_bytes      BIGINT       NOT NULL DEFAULT 0,
+  sha256          CHAR(64)     NOT NULL DEFAULT '',
+  status          TINYINT      NOT NULL DEFAULT 0, -- 0待上传 1就绪 2已删除
+  created_at      DATETIME(3)  NOT NULL,
   UNIQUE KEY uk_object_key (bucket, object_key),
   KEY idx_owner (owner_user_id, purpose),
-  KEY idx_status_created (status, created_at)
+  KEY idx_status_created (status, created_at),
+  KEY idx_conversation (conversation_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 ```
 
@@ -1131,40 +1134,41 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 
 ### 8.6 文件 `/files`（✅ 已注册，过期 pending 与删除态对象回收 ✅）
 
-`file_objects` 表（migration `000005`）、S3 适配层（`internal/pkg/storage/s3`）与文件服务（`internal/service/file`）已就绪。
+`file_objects` 表（migration `000005`，`000006` 增加 `conversation_id`）、S3 适配层（`internal/pkg/storage/s3`）与文件服务（`internal/service/file`）已就绪。
 
 | 方法 | 路径 | 鉴权 | 说明 | 状态 |
 |---|---|---|---|---|
-| POST | `/files/presign` | 🔐 | 申请单文件上传：校验 purpose/mime/size，返回 fileId + PUT URL | ✅ |
+| POST | `/files/presign` | 🔐 | 申请单文件上传：校验 purpose/mime/size，返回 fileId + PUT URL；purpose 支持 avatar、chat_image、chat_file、attachment；chat 用途必须传 conversationId | ✅ |
 | POST | `/files/{fileId}/complete` | 🔐 | 客户端上传完成后校验对象并置为 ready | ✅ |
-| POST | `/files/multipart/presign` | 🔐 | 申请分片上传（attachment 8MB–200MB），返回全部分片 URL | ✅ |
+| POST | `/files/multipart/presign` | 🔐 | 申请分片上传（attachment / chat_file 8MB–200MB），返回全部分片 URL | ✅ |
 | POST | `/files/{fileId}/multipart/complete` | 🔐 | 合并分片并二次校验，置为 ready | ✅ |
 | POST | `/files/{fileId}/multipart/parts` | 🔐 | 刷新分片签名（复用 uploadId，可指定分片） | ✅ |
 | POST | `/files/{fileId}/multipart/abort` | 🔐 | 取消未完成的分片上传 | ✅ |
-| GET | `/files/{fileId}/url` | 🔐 | 现签 GET URL | ✅ |
+| GET | `/files/{fileId}/url` | 🔐 | 现签 GET URL；avatar 允许非 owner，chat 资源仅会话成员，attachment 仅本人 | ✅ |
 | DELETE | `/files/{fileId}` | 🔐 | 软删（仅本人/管理端） | ✅ |
-| POST | `/files/chat-attachment/presign` | 🔐 | 通用聊天附件签名 | ❌ 不做（直接走 goim `/third/*`） |
+| POST | `/files/chat-attachment/presign` | 🔐 | 通用聊天附件签名 | ❌ 不做（由通用 `/files/presign` + `purpose=chat_file` 覆盖） |
 
 `POST /files/presign` 目标请求/响应：
 
 ```json
 // request
-{ "purpose": "avatar", "fileName": "me.png", "mime": "image/png", "size": 120000, "sha256": "..." }
+{ "purpose": "chat_image", "conversationId": "si_123_456", "fileName": "pic.jpg", "mime": "image/jpeg", "size": 120000, "sha256": "..." }
 // response
-{ "fileId": "18", "objectKey": "public/avatar/123/uuid.png", "uploadUrl": "https://...X-Amz-Signature=...",
-  "method": "PUT", "headers": { "Content-Type": "image/png" }, "expiresAt": 1763000600 }
+{ "fileId": "18", "objectKey": "chat_image/123/uuid.jpg", "uploadUrl": "https://...X-Amz-Signature=...",
+  "method": "PUT", "headers": { "Content-Type": "image/jpeg" }, "expiresAt": 1763000600 }
 ```
 
 实现约定（✅）：
 
-- 对象键由服务端统一生成：公开资源为 `public/{purpose}/{userId}/file_<uuid>.{ext}`，私有资源为 `{purpose}/{userId}/file_<uuid>.{ext}`；客户端不能指定；文件名不参与路径，`file_` 前缀用于区分来源。
-- 首版单文件仅 `avatar`：JPEG/PNG/WebP，≤ 5MB；预签名 PUT URL 默认 15 分钟。
-- 分片上传仅 `attachment`：8MB < size ≤ 200MB，固定 8MB 分片、最多 100 片；分片预签名默认 2 小时（`storage.multipart_presign_expire`），单文件 PUT 与 GET URL 仍为 15 分钟（`storage.presign_expire`）。附件 MIME 白名单：JPEG/PNG/WebP/GIF、PDF、ZIP、TXT、MP4、DOCX/XLSX/PPTX。
+- 对象键由服务端统一生成：仅公开头像为 `public/avatar/{userId}/file_<uuid>.{ext}`，其余用途为 `{purpose}/{userId}/file_<uuid>.{ext}`；客户端不能指定；文件名不参与路径，`file_` 前缀用于区分来源。
+- 单文件用途：`avatar` JPEG/PNG/WebP，≤ 5MB；`chat_image` JPEG/PNG/WebP/GIF，≤ 8MB，不支持分片；`chat_file`、`attachment` 单文件 ≤ 8MB；预签名 PUT URL 默认 15 分钟。
+- 分片上传仅 `attachment` 与 `chat_file`：8MB < size ≤ 200MB，固定 8MB 分片、最多 100 片；分片预签名默认 2 小时（`storage.multipart_presign_expire`），单文件 PUT 与 GET URL 仍为 15 分钟（`storage.presign_expire`）。`chat_file`/`attachment` MIME 白名单：JPEG/PNG/WebP/GIF、MP3/WAV/AMR/M4A/AAC、PDF、ZIP、TXT、MP4、DOCX/XLSX/PPTX。
 - `attachment` 单文件上限 8MB；超过时返回 1001，提示改用分片接口。
 - 分片 `upload_id` 随 pending 记录落库，complete/abort 由服务端按 `fileId` 定位，客户端无需回传。
 - 续期接口 `POST /files/{fileId}/multipart/parts` 复用原 uploadId 与 objectKey，不产生新记录；`partNumbers` 为空刷新全部分片，否则必须严格递增且 ≤ partCount；已 ready 返回 1005。
 - `complete`（含分片）通过 `HeadObject` 校验对象存在、实际大小与 Content-Type，通过后置 ready，重复调用幂等。
-- 访问 URL 仅限本人且 ready 的文件现签，GET URL 默认 15 分钟；头像例外：`avatar_key` 由服务端解析为 `public_endpoint/bucket/key` 的稳定公开 URL（`avatarUrl`），部署侧需对 `public/` 命名空间开放匿名 GET。
+- 会话绑定：`chat_image`/`chat_file` 必须传 `conversationId`（单聊 `si_<id1>_<id2>`，群聊 `g_<groupID>`/`sg_<groupID>`）。会话 ID 由 goim 权威生成，biz 只校验格式并原样保存、不重排。单聊校验 owner 是两端之一；群聊上传时通过 goim `get_group_member_user_id` 校验 owner 在群，IM 不可用时返回 9002（fail closed）。非 chat 用途传了 `conversationId` 返回 1001。
+- 访问 URL：仅 avatar 在 `FileView.url` 返回稳定公开地址；chat 资源与 attachment 的 `url` 为空，需调用 `/files/{fileId}/url` 现签（默认 15 分钟）。owner 与 avatar 直接放行；单聊校验请求者是两端之一；群聊实时校验请求者在群（Redis 缓存 60s，失败不缓存并返回 9002）；无权限统一返回 1004。历史 `conversation_id=''` 的 chat 记录仅 owner 可访问。
 - 删除为软删并尽力删除对象；pending 分片上传执行 Abort；对象删除失败只记日志，由清理任务（⏳，按 `expires_at` / `status=deleted` / 残留 upload_id）回收。
 - 对象存储未配置时接口返回 9002，不影响服务启动。
 
@@ -1209,7 +1213,6 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 | 消息搜索 | `/api/v1/msg/search_msg` | 管理端/客服检索 | ❌ 不做 |
 | 好友/黑名单 | `/api/v1/relation/*` | 服务端已实现 | ❌ 不做 |
 | 群组/群成员 | `/api/v1/group/*` | 服务端已实现 | ❌ 不做 |
-| 聊天附件上传 | `/api/v1/third/*` | SDK FileUploader + RustFS | ❌ 不做 |
 
 **B 档：业务扩展契约（⏳ 规划中，未注册路由）**
 
@@ -1310,7 +1313,24 @@ GET /profile/me、GET /profile/users/{id}、POST /profile/batch → 返回 avata
 `avatar_key` 仍只存对象 key（`public/avatar/...`），完整 URL 由 `storage.public_endpoint + bucket + key` 在读取时生成；
 部署侧必须对 `public/` 命名空间开放匿名读，其他前缀仍只允许预签名访问；`PublicObjectURL` 会拒绝非 `public/` key，避免私有对象被误生成匿名地址。
 
-### 9.5 业务公告（M6，⏳ 规划中）
+### 9.5 聊天资源上传与访问（✅ 已实现，仅会话成员可见）
+
+```
+POST /files/presign {purpose:chat_image, conversationId:"si_<a>_<b>"} → fileId + objectKey(chat_image/<uid>/<uuid>.<ext>) + PUT URL
+POST /files/multipart/presign {purpose:chat_file, conversationId:"g_<groupID>"} → 分片 URL（语音/视频/大文件）
+client ──直传──▶ RustFS
+POST /files/{id}/complete 或 multipart/complete → HeadObject 校验 size/mime → status=ready → FileView.url（空）
+客户端在消息体只存 fileId；渲染前调用 GET /files/{id}/url 换取 15 分钟预签名 URL
+```
+
+- `chat_image`：仅图片，≤ 8MB，单文件 PUT；`chat_file`：图片/音频/视频/文档，≤ 8MB 单文件、> 8MB 走分片，最大 200MB。
+- 上传必须绑定 `conversationId`：单聊 `si_<id1>_<id2>`（原样使用 goim 生成的 ID，服务端只校验不重排，owner 必须是一端）；群聊 `g_<groupID>`/`sg_<groupID>`（owner 必须在群，依赖 IM）。
+- 对象落在私有命名空间，不再写入 `public/`；访问严格由服务端判定：owner、单聊对端、当前群成员；其余统一返回 1004。
+- 群成员查询失败（IM 未配置/超时/非 0 码）返回 9002，fail closed；成功结果按群缓存 60s，避免一条消息多张图片反复远程调用。
+- 每次渲染都应调用 `GET /files/{id}/url`，预签名最长 15 分钟；不要把 url 写入消息体或长期缓存。
+- 历史 `conversation_id=''` 的聊天记录仅 owner 可换取 URL；已存在的 `public/chat_*` 对象不做批量搬迁（已外发 URL 无法撤销），由后续任务处理。
+
+### 9.6 业务公告（M6，⏳ 规划中）
 
 ```
 POST /admin/announcements
@@ -1410,7 +1430,7 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 - 删除态对象（用户主动删除、账号注销、过期未完成）统一由后台任务回收，保证「元数据已删但对象残留」可重试且不重复误删。
 - 不引入第二套 ID：业务 `userID` 即 IM `userID`；不猜测 goim 未公开的接口语义。
 
-#### 数据模型（已并入基线迁移 `000001_account_init` / `000005_file_objects`）
+#### 数据模型（已并入基线迁移 `000001_account_init` / `000005_file_objects` / `000006_file_conversation`）
 
 | 表 | 变更 | 说明 |
 | --- | --- | --- |
@@ -1418,6 +1438,7 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 | `account_users` | 新增 `KEY idx_status_purge (status, purge_at)` | 支撑 cron 扫描待清除账号 |
 | `file_objects` | 新增 `object_deleted_at DATETIME(3) NULL` | 对象已回收时间；NULL 表示 `status=2` 但对象尚未确认删除 |
 | `file_objects` | 新增 `KEY idx_status_object_deleted (status, object_deleted_at)` | 支撑回收任务扫描 |
+| `file_objects` | 新增 `conversation_id VARCHAR(64) NOT NULL DEFAULT ''` 与 `KEY idx_conversation (conversation_id, status)` | 聊天资源绑定会话，支撑成员鉴权与审计 |
 | `account_users.im_status` | 语义扩展 `3=已注销`（列类型不变） | 仅改注释与领域常量，不新增列 |
 
 `status` 语义保持不变：`0 pending`、`1 ready`、`2 deleted`（元数据已删）。对象是否真正删除由 `object_deleted_at` 表达，避免用状态位混合表达两件事。

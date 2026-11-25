@@ -928,6 +928,12 @@
       "FilePresignRequest": {
         "description": "申请文件直传；对象键由服务端生成，客户端不可指定。",
         "properties": {
+          "conversationId": {
+            "description": "聊天资源绑定的会话标识：单聊 `si_<id1>_<id2>`，群聊 `g_<groupID>` 或 `sg_<groupID>`。chat_image/chat_file 必填；avatar/attachment 必须为空，传了返回 1001。",
+            "example": "si_123_456",
+            "maxLength": 64,
+            "type": "string"
+          },
           "fileName": {
             "description": "客户端原始文件名，仅用于展示，不参与对象路径。",
             "example": "me.png",
@@ -935,12 +941,19 @@
             "type": "string"
           },
           "mime": {
-            "description": "文件类型；必须与实际上传的 Content-Type 一致。avatar 仅支持图片，attachment 支持下方完整白名单。",
+            "description": "文件类型；必须与实际上传的 Content-Type 一致。avatar 仅支持 JPEG/PNG/WebP；chat_image 仅支持 JPEG/PNG/WebP/GIF；chat_file 与 attachment 支持下方完整白名单（图片、音频、视频、文档）。",
             "enum": [
               "image/jpeg",
               "image/png",
               "image/webp",
               "image/gif",
+              "audio/mpeg",
+              "audio/wav",
+              "audio/x-wav",
+              "audio/amr",
+              "audio/mp4",
+              "audio/x-m4a",
+              "audio/aac",
               "application/pdf",
               "application/zip",
               "text/plain",
@@ -953,12 +966,14 @@
             "type": "string"
           },
           "purpose": {
-            "description": "文件用途；avatar 为头像，attachment 为业务附件。",
+            "description": "文件用途；avatar 为头像（公开，落在 public/ 命名空间）；chat_image 为聊天图片，chat_file 为聊天文件，二者必须绑定 conversationId 且仅会话成员可访问；attachment 为仅本人可读的业务附件。",
             "enum": [
               "avatar",
+              "chat_image",
+              "chat_file",
               "attachment"
             ],
-            "example": "avatar",
+            "example": "chat_image",
             "type": "string"
           },
           "sha256": {
@@ -968,7 +983,7 @@
             "type": "string"
           },
           "size": {
-            "description": "文件字节数；avatar ≤ 5MB，attachment ≤ 8MB（超过 8MB 使用分片上传）。",
+            "description": "文件字节数；avatar ≤ 5MB，chat_image ≤ 8MB，chat_file/attachment ≤ 8MB（超过 8MB 使用分片上传，最大 200MB）。",
             "example": 120000,
             "format": "int64",
             "maximum": 8388608,
@@ -1014,8 +1029,8 @@
             "type": "string"
           },
           "objectKey": {
-            "description": "bucket 内对象路径。公开资源位于 `public/\u003cpurpose\u003e/\u003cownerID\u003e/`（如头像），\n私有资源位于 `\u003cpurpose\u003e/\u003cownerID\u003e/`（如附件）。\n",
-            "example": "public/avatar/123/file_0198c2f0-6c1a-7b3e-9d4f-abcdef012345.png",
+            "description": "bucket 内对象路径。仅 avatar 位于 `public/\u003cpurpose\u003e/\u003cownerID\u003e/`；\nchat_image/chat_file/attachment 位于 `\u003cpurpose\u003e/\u003cownerID\u003e/`，不可匿名读。\n",
+            "example": "chat_image/123/file_0198c2f0-6c1a-7b3e-9d4f-abcdef012345.jpg",
             "type": "string"
           },
           "uploadUrl": {
@@ -1138,7 +1153,7 @@
             "type": "string"
           },
           "objectKey": {
-            "description": "bucket 内对象路径；公开资源为 `public/\u003cpurpose\u003e/...`，私有资源为 `\u003cpurpose\u003e/...`。\n",
+            "description": "bucket 内对象路径；仅 avatar 为 `public/\u003cpurpose\u003e/...`，其余用途均为 `\u003cpurpose\u003e/...`。\n",
             "example": "public/avatar/123/file_0198c2f0-6c1a-7b3e-9d4f-abcdef012345.png",
             "type": "string"
           },
@@ -1164,6 +1179,11 @@
             "example": 1,
             "format": "int32",
             "type": "integer"
+          },
+          "url": {
+            "description": "仅 avatar 在 ready 后的稳定访问地址，任何人可直接 GET；\nchat_image、chat_file、attachment 为空字符串，需调用 GET /files/{fileId}/url 现签，\n聊天资源按会话成员鉴权，不要缓存地址或写入消息体。\n",
+            "example": "https://files.example.com/goim-business/public/avatar/123/0198c2f0....png",
+            "type": "string"
           }
         },
         "required": [
@@ -1428,20 +1448,33 @@
         "type": "object"
       },
       "MultipartPresignRequest": {
-        "description": "申请分片上传；仅 attachment 用途，8MB \u003c size ≤ 200MB。",
+        "description": "申请分片上传；attachment（仅本人）与 chat_file（需绑定会话）用途支持，8MB \u003c size ≤ 200MB。",
         "properties": {
+          "conversationId": {
+            "description": "会话标识；chat_file 必填（单聊 `si_<id1>_<id2>`，群聊 `g_<groupID>`/`sg_<groupID>`），attachment 必须为空。",
+            "example": "g_1001",
+            "maxLength": 64,
+            "type": "string"
+          },
           "fileName": {
             "example": "report.pdf",
             "maxLength": 255,
             "type": "string"
           },
           "mime": {
-            "description": "附件类型白名单。",
+            "description": "附件与聊天文件类型白名单（图片、音频、视频、文档）。",
             "enum": [
               "image/jpeg",
               "image/png",
               "image/webp",
               "image/gif",
+              "audio/mpeg",
+              "audio/wav",
+              "audio/x-wav",
+              "audio/amr",
+              "audio/mp4",
+              "audio/x-m4a",
+              "audio/aac",
               "application/pdf",
               "application/zip",
               "text/plain",
@@ -1455,9 +1488,10 @@
           },
           "purpose": {
             "enum": [
-              "attachment"
+              "attachment",
+              "chat_file"
             ],
-            "example": "attachment",
+            "example": "chat_file",
             "type": "string"
           },
           "sha256": {
@@ -1466,7 +1500,7 @@
             "type": "string"
           },
           "size": {
-            "description": "文件总字节数；超过 8MB 才需要分片，最大 200MB。",
+            "description": "文件总字节数；超过 8MB 才需要分片，最大 200MB（attachment 与 chat_file 相同）。",
             "example": 12582912,
             "format": "int64",
             "maximum": 209715200,
@@ -2277,7 +2311,7 @@
     },
     "/files/multipart/presign": {
       "post": {
-        "description": "仅 attachment 用途支持，适用于 8MB 以上、200MB 以内的文件。\n服务端初始化 S3 Multipart 上传并一次返回全部分片预签名 URL；客户端逐片 PUT 后调用 complete。\n分片大小 8MB，分片数上限 100；分片签名默认 2 小时（storage.multipart_presign_expire），\n过期后可调用 /files/{fileId}/multipart/parts 刷新；pending 记录 24 小时未完成时由清理任务回收。\n错误码：1001 参数错误（用途/MIME/大小不合法）、1002 未认证或登录态已失效、\n9001 服务内部错误、9002 依赖服务不可用。\n",
+        "description": "仅 attachment 与 chat_file 用途支持，适用于 8MB 以上、200MB 以内的文件。\nchat_file 必须传 conversationId，规则与 /files/presign 相同；attachment 必须不传。\n服务端初始化 S3 Multipart 上传并一次返回全部分片预签名 URL；客户端逐片 PUT 后调用 complete。\n分片大小 8MB，分片数上限 100；分片签名默认 2 小时（storage.multipart_presign_expire），\n过期后可调用 /files/{fileId}/multipart/parts 刷新；pending 记录 24 小时未完成时由清理任务回收。\n错误码：1001 参数错误（用途/MIME/大小/会话不合法、非群成员）、1002 未认证或登录态已失效、\n9001 服务内部错误、9002 依赖服务不可用（含群成员查询失败）。\n",
         "operationId": "presignMultipartUpload",
         "requestBody": {
           "content": {
@@ -2307,7 +2341,7 @@
     },
     "/files/presign": {
       "post": {
-        "description": "校验 purpose / mime / size 后生成服务端对象键与 PUT 预签名 URL，记录以 pending 状态落库。\n客户端按返回的 method、uploadUrl 与 headers 直接上传对象字节，服务端不代理文件内容。\n支持头像与单文件附件：purpose=avatar（size ≤ 5MB）；purpose=attachment（size ≤ 8MB，\n超过 8MB 改用 /files/multipart/presign）。\npending 记录 24 小时未完成时由清理任务回收。\n错误码：1001 参数错误、1002 未认证或登录态已失效、\n9001 服务内部错误、9002 依赖服务不可用（对象存储未配置时同样返回 9002）。\n",
+        "description": "校验 purpose / mime / size 后生成服务端对象键与 PUT 预签名 URL，记录以 pending 状态落库。\n客户端按返回的 method、uploadUrl 与 headers 直接上传对象字节，服务端不代理文件内容。\n支持头像、聊天图片、聊天文件与单文件附件：purpose=avatar（size ≤ 5MB）；purpose=chat_image（size ≤ 8MB，仅图片）；\npurpose=chat_file（size ≤ 8MB，超过 8MB 改用 /files/multipart/presign）；purpose=attachment（size ≤ 8MB，超过 8MB 同样走分片）。\navatar 是公开用途，对象 key 固定落在 public/ 命名空间；chat_image、chat_file 必须传 conversationId，对象落在私有命名空间，仅会话成员可访问；attachment 为本人私有资源，也必须不传 conversationId。\nconversationId 规则：单聊 si_<id1>_<id2>（会话 ID 由 goim 权威生成，服务端只校验格式、原样保存不重排，上传者必须是一端）；群聊 g_<groupID> 或 sg_<groupID>，上传者必须是群成员（依赖 IM，不可用时返回 9002）。\npending 记录 24 小时未完成时由清理任务回收。\n错误码：1001 参数错误（含会话缺失、格式非法、非群成员）、1002 未认证或登录态已失效、\n9001 服务内部错误、9002 依赖服务不可用（对象存储未配置或群成员查询失败时同样返回 9002）。\n",
         "operationId": "presignFileUpload",
         "requestBody": {
           "content": {
@@ -2362,7 +2396,7 @@
     },
     "/files/{fileId}/complete": {
       "post": {
-        "description": "读取对象存储元数据，校验对象存在、实际大小 ≤ 用途上限且 Content-Type 与申请一致，\n通过后把记录从 pending 置为 ready；重复调用已 ready 的文件幂等返回。\n错误码：1001 参数错误（含对象未上传、大小或类型不符）、1002 未认证或登录态已失效、\n1004 资源不存在、1005 状态冲突、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "description": "读取对象存储元数据，校验对象存在、实际大小 ≤ 用途上限且 Content-Type 与申请一致，\n通过后把记录从 pending 置为 ready；重复调用已 ready 的文件幂等返回。\n仅 avatar 在返回的 FileView 中带稳定公开 url，可直接作为头像地址；\nchat_image、chat_file、attachment 的 url 为空，需再调用 /files/{fileId}/url 现签。\n错误码：1001 参数错误（含对象未上传、大小或类型不符）、1002 未认证或登录态已失效、\n1004 资源不存在、1005 状态冲突、9001 服务内部错误、9002 依赖服务不可用。\n",
         "operationId": "completeFileUpload",
         "parameters": [
           {
@@ -2482,7 +2516,7 @@
     },
     "/files/{fileId}/url": {
       "get": {
-        "description": "仅本人且状态为 ready 的文件可换取短时预签名 GET URL；他人或已删除文件返回 1004。\n错误码：1001 参数错误（文件未就绪）、1002 未认证或登录态已失效、\n1004 资源不存在、9001 服务内部错误、9002 依赖服务不可用。\n",
+        "description": "为已就绪的文件换取短时预签名 GET URL（默认 15 分钟）。\navatar 允许任何登录用户换取；\nchat_image/chat_file 仅会话成员可换取：单聊为两端用户，群聊为当前群成员（依赖 IM，不可用时返回 9002）；\nattachment 仅限本人。无权限、他人或已删除文件统一返回 1004，避免暴露资源存在性。\n聊天资源每次渲染都应调用本接口换取新地址，不要缓存或写入消息体。\n错误码：1001 参数错误（文件未就绪）、1002 未认证或登录态已失效、\n1004 资源不存在或无权限、9001 服务内部错误、9002 依赖服务不可用（含群成员查询失败）。\n",
         "operationId": "getFileURL",
         "parameters": [
           {

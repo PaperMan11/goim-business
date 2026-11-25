@@ -1,6 +1,6 @@
 # 前端对接：设备标识、请求头与文件上传
 
-本文说明前端（Web / 桌面 / 移动端）如何生成与传递设备标识，以及调用账号接口时的请求头约定；§8 为分片上传与签名刷新，§9 为头像上传与公开访问。接口字段以 `api/openapi.yaml` 为准。
+本文说明前端（Web / 桌面 / 移动端）如何生成与传递设备标识，以及调用账号接口时的请求头约定；§8 为分片上传与签名刷新，§9 为头像、聊天资源上传与访问控制。接口字段以 `api/openapi.yaml` 为准。
 
 ## 1. 请求头约定
 
@@ -131,7 +131,7 @@ const { data } = await res.json();
 
 ## 8. 大文件分片上传与重试
 
-头像与不超过 8MB 的附件统一走 `POST /files/presign` 单文件 PUT（`purpose` 分别为 `avatar`、`attachment`）；附件超过 8MB 时使用分片上传，最大 200MB，固定 8MB/片、最多 100 片。
+头像、聊天图片、聊天文件与不超过 8MB 的附件统一走 `POST /files/presign` 单文件 PUT（`purpose` 分别为 `avatar`、`chat_image`、`chat_file`、`attachment`；`chat_image`/`chat_file` 必须传 `conversationId`）；`chat_file` 与 `attachment` 超过 8MB 时使用分片上传，最大 200MB，固定 8MB/片、最多 100 片。
 
 ### 8.1 整体流程
 
@@ -187,9 +187,9 @@ await fetch(`${API_BASE}/files/${fileId}/multipart/parts`, {
 | 已 ready 还调用刷新，或状态已变化 | `1005` | 按成功处理或先查询状态 |
 | 对象存储不可用 | `9002` | 退避后重试，持续失败则提示稍后再试 |
 
-## 9. 头像上传与公开访问
+## 9. 头像、聊天资源与访问控制
 
-头像走**单文件上传**，并且是**公开资源**，不要使用附件那套“仅本人现签 URL”的方式。
+头像与聊天资源（图片、语音、视频、文件）都走**单文件/分片上传**。头像公开、可长期缓存；聊天资源绑定会话，**仅会话成员可见**，每次渲染前换取短时 URL。头像见 9.1–9.3，聊天图片与聊天文件见 9.4。
 
 ### 9.1 上传流程
 
@@ -235,3 +235,45 @@ await fetch(`${API_BASE}/files/${fileId}/multipart/parts`, {
 - goim 侧同步的 faceURL 也使用同一个公开 URL，聊天界面无需再换取签名。
 - 更新头像时先完成新文件上传与 complete，再更新资料；旧对象由清理任务按记录状态回收。
 - 附件（`purpose=attachment`）仍是私有资源，只对本人返回 15 分钟预签名 URL，二者不要混用。
+
+### 9.4 聊天图片与聊天文件（chat_image / chat_file）
+
+聊天图片与聊天文件是**会话私有资源**：上传时必须传 `conversationId`，只有发送双方的会话成员或群成员才能换取访问 URL。
+
+**会话 ID（conversationId）**
+
+- 单聊：`si_<id1>_<id2>`。必须原样使用 goim 生成的会话 ID，服务端只校验格式、不重排；上传者必须是两端之一。
+- 群聊：`g_<groupID>` 或 `sg_<groupID>`，上传者必须是当前群成员。
+
+**聊天图片（chat_image）**
+
+1. `POST /files/presign`，请求体 `{ "purpose": "chat_image", "conversationId": "si_123_456", "fileName": "pic.jpg", "mime": "image/jpeg", "size": 300000 }`。
+   - 仅支持 `image/jpeg`、`image/png`、`image/webp`、`image/gif`，单文件 ≤ 8MB，不支持分片。
+2. 按 `uploadUrl` + `headers` 直接 `PUT` 文件到对象存储。
+3. `POST /files/{fileId}/complete` 置为 ready；响应 `data.url` 为**空字符串**，请不要写入消息体。
+4. IM 图片消息只存 `fileId`（或业务侧返回的文件 ID），渲染时调用 `GET /files/{fileId}/url` 换取 15 分钟预签名 URL。
+
+**聊天文件（chat_file：语音、视频、文档等）**
+
+1. ≤ 8MB：与图片相同，`POST /files/presign` 且 `purpose=chat_file`，完成后 `data.url` 为空。
+2. > 8MB：走 `POST /files/multipart/presign`（`purpose=chat_file` + `conversationId`），逐片 PUT 后调用 `/files/{fileId}/multipart/complete`，最大 200MB。
+3. 支持 JPEG/PNG/WebP/GIF、MP3/WAV/AMR/M4A/AAC、PDF/ZIP/TXT、MP4、DOCX/XLSX/PPTX。
+
+**获取访问 URL**
+
+```js
+// 每次渲染或点击下载前换取；不要缓存 URL，也不要写回消息体
+const res = await fetch(`${API_BASE}/files/${fileId}/url`, {
+  headers: { Authorization: `Bearer ${accessToken}` },
+});
+const { data } = await res.json(); // data.url 为 15 分钟预签名地址
+```
+
+要点：
+
+- 上传缺失 `conversationId` 返回 **1001**；单聊上传者不在两端、群聊上传者不在群同样返回 1001。
+- 群成员校验依赖 IM；IM 不可用时上传或换 URL 返回 **9002**，前端应提示稍后重试。
+- 非会话成员、他人附件或已删除文件统一返回 **1004**，不要据此推断文件是否存在。
+- 聊天资源 `GET /files/{fileId}/url` 每次现签，URL 最长存活 15 分钟；不要用 `storage.public_endpoint` 自行拼接。
+- 与 `attachment` 的区别：`attachment` 仅本人可见；聊天资源对会话成员可见，两者都不走 `public/` 匿名读。
+- 历史（升级前）的聊天消息可能只有公开 URL、没有 `fileId`，前端按兼容逻辑继续直接渲染；新消息必须改为 `fileId` + 现签。

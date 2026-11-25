@@ -9,6 +9,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	imadapter "goim-business/internal/adapter/im"
 	"goim-business/internal/client/goim"
 	"goim-business/internal/config"
 	accountjob "goim-business/internal/job/account"
@@ -112,7 +113,7 @@ func NewCronApp(ctx context.Context, cfg *config.Config, log *zap.Logger) (*Cron
 		Redis:   rdb,
 		Storage: storageClient,
 		IM:      im,
-		Worker: imjob.NewWorker(users, imClient{client: im}, outboxrepo.New(db), cfg.IM.OutboxBatchSize, timex.Now, log.Sugar(),
+		Worker: imjob.NewWorker(users, imadapter.NewClient(im), outboxrepo.New(db), cfg.IM.OutboxBatchSize, timex.Now, log.Sugar(),
 			imjob.WithAvatarURL(func(objectKey string) string {
 				return cfg.Storage.PublicObjectURL(objectKey)
 			}),

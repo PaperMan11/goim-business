@@ -33,10 +33,11 @@ const (
 	// codeNoPermission 是 admin token 失效时 im-api 返回的业务码。
 	codeNoPermission = 1002
 
-	methodAdminToken     = "admin_token"
-	methodRegisterUser   = "register_user"
-	methodUpdateUserInfo = "update_user_info"
-	methodUserToken      = "user_token"
+	methodAdminToken         = "admin_token"
+	methodRegisterUser       = "register_user"
+	methodUpdateUserInfo     = "update_user_info"
+	methodUserToken          = "user_token"
+	methodGroupMemberUserIDs = "group_member_user_ids"
 )
 
 // ErrDisabled 表示未配置 IM（base_url 为空）。

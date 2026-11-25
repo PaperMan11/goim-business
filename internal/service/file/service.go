@@ -15,6 +15,11 @@ import (
 	"goim-business/internal/types"
 )
 
+// GroupMembers 提供群成员查询；由装配层注入，IM 未配置时返回错误。
+type GroupMembers interface {
+	MemberUserIDs(ctx context.Context, groupID string) ([]string, error)
+}
+
 // Config 是文件服务的运行期参数。
 type Config struct {
 	// PresignExpire 是单文件上传/下载预签名 URL 的有效期。
@@ -23,6 +28,11 @@ type Config struct {
 	MultipartPresignExpire time.Duration
 	// PendingTTL 是 pending 记录的最长保留时间，超时由清理任务回收。
 	PendingTTL time.Duration
+	// PublicObjectURL 把 public/ 命名空间的对象 key 解析为稳定公开地址；
+	// 未配置对象存储或非公开 key 返回空。avatar 的 FileView 会填充该地址。
+	PublicObjectURL func(objectKey string) string
+	// GroupMembers 用于校验群聊资源的会话成员关系；未注入时群聊上传与访问返回依赖错误。
+	GroupMembers GroupMembers
 }
 
 // Service 是文件服务。
@@ -56,6 +66,13 @@ func (s *Service) PresignUpload(ctx context.Context, userID int64, in types.File
 	if err := domain.ValidateUpload(in.Purpose, in.MIME, in.Size, in.SHA256); err != nil {
 		return nil, errcode.InvalidParam(err)
 	}
+	conversationID, err := domain.BindConversation(in.Purpose, in.ConversationID, userID)
+	if err != nil {
+		return nil, errcode.InvalidParam(err)
+	}
+	if err := s.ensureGroupMember(ctx, conversationID, userID); err != nil {
+		return nil, err
+	}
 	ext, err := domain.ExtForUpload(in.Purpose, in.MIME)
 	if err != nil {
 		return nil, errcode.InvalidParam(err)
@@ -68,7 +85,7 @@ func (s *Service) PresignUpload(ctx context.Context, userID int64, in types.File
 
 	now := s.now()
 	objectKey := domain.BuildObjectKey(in.Purpose, userID, uuid, ext)
-	file := domain.NewFile(userID, in.Purpose, in.FileName, objectKey, in.MIME, in.Size, in.SHA256, now.Add(s.cfg.PendingTTL), now)
+	file := domain.NewFile(userID, in.Purpose, conversationID, in.FileName, objectKey, in.MIME, in.Size, in.SHA256, now.Add(s.cfg.PendingTTL), now)
 	if err := s.repo.Create(ctx, file); err != nil {
 		return nil, s.dbErr("创建文件记录", err)
 	}
@@ -110,19 +127,26 @@ func (s *Service) Complete(ctx context.Context, userID int64, rawFileID string) 
 	}
 	// 重复 complete 幂等返回，便于客户端重试。
 	if file.Status == domain.StatusReady {
-		return fileView(file), nil
+		return s.fileView(file), nil
 	}
 	return s.verifyAndMarkReady(ctx, file, userID)
 }
 
 // MultipartPresign 初始化分片上传并一次性返回全部分片的预签名 URL。
-// 当前仅 attachment 用途支持；申请前需先调用本接口，不能对单文件 PUT 使用。
+// 当前 attachment 与 chat_file 用途支持；申请前需先调用本接口，不能对单文件 PUT 使用。
 func (s *Service) MultipartPresign(ctx context.Context, userID int64, in types.MultipartPresignRequest) (*types.MultipartPresignResp, error) {
 	if s.s3 == nil {
 		return nil, errcode.ErrDependency.WithMessage("对象存储未配置，暂不支持文件上传")
 	}
 	if err := domain.ValidateMultipartUpload(in.Purpose, in.MIME, in.Size, in.SHA256); err != nil {
 		return nil, errcode.InvalidParam(err)
+	}
+	conversationID, err := domain.BindConversation(in.Purpose, in.ConversationID, userID)
+	if err != nil {
+		return nil, errcode.InvalidParam(err)
+	}
+	if err := s.ensureGroupMember(ctx, conversationID, userID); err != nil {
+		return nil, err
 	}
 	ext, err := domain.ExtForUpload(in.Purpose, in.MIME)
 	if err != nil {
@@ -142,7 +166,7 @@ func (s *Service) MultipartPresign(ctx context.Context, userID int64, in types.M
 		return nil, errcode.ErrDependency
 	}
 
-	file := domain.NewFile(userID, in.Purpose, in.FileName, objectKey, in.MIME, in.Size, in.SHA256, now.Add(s.cfg.PendingTTL), now)
+	file := domain.NewFile(userID, in.Purpose, conversationID, in.FileName, objectKey, in.MIME, in.Size, in.SHA256, now.Add(s.cfg.PendingTTL), now)
 	file.UploadID = uploadID
 	if err := s.repo.Create(ctx, file); err != nil {
 		s.abortBestEffort(ctx, objectKey, uploadID)
@@ -258,7 +282,7 @@ func (s *Service) MultipartComplete(ctx context.Context, userID int64, rawFileID
 		return nil, err
 	}
 	if file.Status == domain.StatusReady {
-		return fileView(file), nil
+		return s.fileView(file), nil
 	}
 	if file.UploadID == "" {
 		return nil, errcode.InvalidParam(domain.ErrInvalidParts)
@@ -360,10 +384,11 @@ func (s *Service) verifyAndMarkReady(ctx context.Context, file *domain.File, use
 	file.Status = domain.StatusReady
 	// 分片上传已完成；清空本地副本的 upload_id，与仓储保持一致。
 	file.UploadID = ""
-	return fileView(file), nil
+	return s.fileView(file), nil
 }
 
-// URL 为本人已就绪的文件生成短时访问地址。
+// URL 为已就绪的文件生成短时访问地址。
+// avatar 允许任意登录用户换取；chat_image/chat_file 仅会话成员；attachment 仅限本人。
 func (s *Service) URL(ctx context.Context, userID int64, rawFileID string) (*types.FileURLResp, error) {
 	if s.s3 == nil {
 		return nil, errcode.ErrDependency.WithMessage("对象存储未配置，暂不支持文件访问")
@@ -372,9 +397,22 @@ func (s *Service) URL(ctx context.Context, userID int64, rawFileID string) (*typ
 	if err != nil {
 		return nil, err
 	}
-	file, err := s.loadOwned(ctx, fileID, userID)
+	file, err := s.repo.GetByID(ctx, fileID)
+	if err != nil {
+		if err == domain.ErrNotFound {
+			return nil, errcode.ErrNotFound
+		}
+		return nil, s.dbErr("读取文件记录", err)
+	}
+	if file.Status == domain.StatusDeleted {
+		return nil, errcode.ErrNotFound
+	}
+	allowed, err := s.canAccess(ctx, file, userID)
 	if err != nil {
 		return nil, err
+	}
+	if !allowed {
+		return nil, errcode.ErrNotFound
 	}
 	if file.Status != domain.StatusReady {
 		return nil, errcode.InvalidParam(domain.ErrNotReady)
@@ -386,6 +424,72 @@ func (s *Service) URL(ctx context.Context, userID int64, rawFileID string) (*typ
 		return nil, errcode.ErrDependency
 	}
 	return &types.FileURLResp{URL: presigned.URL, ExpiresAt: presigned.ExpireAt / 1000}, nil
+}
+
+// canAccess 判断请求者能否读取文件：owner 与 avatar 直接放行，事务性资源按会话成员校验。
+func (s *Service) canAccess(ctx context.Context, file *domain.File, userID int64) (bool, error) {
+	if file.UserID == userID || domain.IsPublicPurpose(file.Purpose) {
+		return true, nil
+	}
+	if !domain.IsChatPurpose(file.Purpose) {
+		return false, nil
+	}
+	// 历史数据没有会话绑定，无法证明成员关系，按私有处理只允许 owner。
+	if file.ConversationID == "" {
+		return false, nil
+	}
+	if a, b, ok := domain.ConversationUsers(file.ConversationID); ok {
+		return userID == a || userID == b, nil
+	}
+	groupID, ok := domain.ConversationGroupID(file.ConversationID)
+	if !ok {
+		return false, nil
+	}
+	members, err := s.groupMemberUserIDs(ctx, groupID)
+	if err != nil {
+		return false, err
+	}
+	return containsUserID(members, userID), nil
+}
+
+// ensureGroupMember 校验 owner 是否在群；单聊与空会话不产生远程调用。
+func (s *Service) ensureGroupMember(ctx context.Context, conversationID string, userID int64) error {
+	groupID, ok := domain.ConversationGroupID(conversationID)
+	if !ok {
+		return nil
+	}
+	members, err := s.groupMemberUserIDs(ctx, groupID)
+	if err != nil {
+		return err
+	}
+	if !containsUserID(members, userID) {
+		return errcode.InvalidParam(domain.ErrInvalidConversation)
+	}
+	return nil
+}
+
+// groupMemberUserIDs 查询群成员；端口缺失或远程失败统一返回依赖错误，避免放行。
+func (s *Service) groupMemberUserIDs(ctx context.Context, groupID string) ([]string, error) {
+	if s.cfg.GroupMembers == nil {
+		s.log.Errorf("群成员查询未配置: group_id=%s", groupID)
+		return nil, errcode.ErrDependency
+	}
+	members, err := s.cfg.GroupMembers.MemberUserIDs(ctx, groupID)
+	if err != nil {
+		s.log.Errorf("查询群成员失败: group_id=%s, err=%v", groupID, err)
+		return nil, errcode.ErrDependency
+	}
+	return members, nil
+}
+
+func containsUserID(members []string, userID int64) bool {
+	target := convert.ToString(userID)
+	for _, member := range members {
+		if member == target {
+			return true
+		}
+	}
+	return false
 }
 
 // Delete 软删文件并尽力删除对象；重复删除幂等。
@@ -499,8 +603,8 @@ func (s *Service) dbErr(op string, err error) error {
 	return errcode.ErrDependency
 }
 
-func fileView(file *domain.File) *types.FileView {
-	return &types.FileView{
+func (s *Service) fileView(file *domain.File) *types.FileView {
+	view := &types.FileView{
 		FileID:    convert.ToString(file.ID),
 		Purpose:   file.Purpose,
 		ObjectKey: file.ObjectKey,
@@ -510,4 +614,9 @@ func fileView(file *domain.File) *types.FileView {
 		Status:    file.Status,
 		CreatedAt: file.CreatedAt,
 	}
+	// 仅 avatar 返回稳定公开 URL；chat/attachment 留空，由客户端现签。
+	if domain.IsPublicPurpose(file.Purpose) && s.cfg.PublicObjectURL != nil {
+		view.URL = s.cfg.PublicObjectURL(file.ObjectKey)
+	}
+	return view
 }
