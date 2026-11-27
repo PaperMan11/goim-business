@@ -18,12 +18,15 @@ type IMToken struct {
 	ExpireAt time.Time
 }
 
-// IMClient 负责在 IM 侧开通账号、同步资料并兑换用户 token。
+// IMClient 负责在 IM 侧开通账号、同步资料、兑换用户 token，并把业务侧的会话撤销同步到 IM。
+// 实现必须幂等：设备不在线或 IM 未启用时不应报错。
 type IMClient interface {
 	Enabled() bool
 	RegisterUser(ctx context.Context, userID, nickname, avatarURL string) error
 	UpdateUserInfo(ctx context.Context, userID, nickname, avatarURL string) error
 	UserToken(ctx context.Context, userID string, platformID int) (*IMToken, error)
+	// KickDevice 断开目标设备的连接并使其 IM token 失效。
+	KickDevice(ctx context.Context, userID string, platform int8, deviceID string) error
 }
 
 // IMTokenCache 缓存按 (userID, platform) 维度的 IM token。

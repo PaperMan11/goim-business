@@ -48,3 +48,12 @@ func (c *Client) UserToken(ctx context.Context, userID string, platformID int) (
 	}
 	return &ports.IMToken{Value: tok.Value, ExpireAt: tok.ExpireAt}, nil
 }
+
+// KickDevice 按设备踢下线；IM 未配置或设备不在线时视为成功。
+func (c *Client) KickDevice(ctx context.Context, userID string, platform int8, deviceID string) error {
+	err := c.client.ForceLogout(ctx, userID, int32(platform), []string{deviceID})
+	if errors.Is(err, goim.ErrDisabled) {
+		return nil
+	}
+	return err
+}

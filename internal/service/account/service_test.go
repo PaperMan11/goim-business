@@ -546,6 +546,9 @@ type fakeProvisioner struct {
 	tokenCalls     int
 	lastTokenUser  string
 	lastTokenPlatf int
+
+	kickCalls []kickCall
+	kickErr   error
 }
 
 func newFakeProvisioner(enabled bool) *fakeProvisioner {
@@ -575,6 +578,13 @@ func (f *fakeProvisioner) UserToken(_ context.Context, userID string, platformID
 	f.lastTokenUser = userID
 	f.lastTokenPlatf = platformID
 	return f.token, f.tokenErr
+}
+
+func (f *fakeProvisioner) KickDevice(_ context.Context, userID string, platform int8, deviceID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.kickCalls = append(f.kickCalls, kickCall{userID: userID, platform: platform, deviceID: deviceID})
+	return f.kickErr
 }
 
 func (f *fakeProvisioner) UpdateUserInfo(_ context.Context, userID, nickname, avatarURL string) error {
@@ -703,6 +713,24 @@ func (f *fakeIMTokenCache) entry(userID string, platform int8) (fakeIMTokenEntry
 	defer f.mu.Unlock()
 	entry, ok := f.entries[imTokenKey(userID, platform)]
 	return entry, ok
+}
+
+type kickCall struct {
+	userID   string
+	platform int8
+	deviceID string
+}
+
+func (f *fakeProvisioner) snapshotKicks() []kickCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]kickCall(nil), f.kickCalls...)
+}
+
+func (f *fakeProvisioner) setKickErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.kickErr = err
 }
 
 type fakeCreds struct {

@@ -3,8 +3,8 @@
 | 项 | 值 |
 |---|---|
 | 文档类型 | 技术选型 + 架构设计（含实现状态标注） |
-| 版本 | v1.1 |
-| 日期 | 2026-11-14 |
+| 版本 | v1.2 |
+| 日期 | 2026-11-27 |
 | 适用客户端 | Web 聊天室、桌面端、后续 iOS/Android |
 | 服务代号 | `goim-business` |
 | 前置结论 | IM 连接与消息通道继续由 goim 承担；本服务只做业务后端 |
@@ -21,7 +21,7 @@
 
 新建一个 **Go + gin + gorm/MySQL + Redis + zap + Prometheus 的模块化单体服务 `goim-business`**，作为账号与业务身份的唯一事实源。**业务 userID 直接复用为 IM userID，不做任何映射**；通过服务端持有的 admin 凭证向 goim 兑换 IM token，让 Web/桌面端用 `LoginWithToken` 接入，彻底移除前端内置的 `adminSecret`。
 
-**当前落地状态**：账号域（注册、登录、刷新轮换、登出、会话列表、踢会话、改密）、access JWT 鉴权、Redis 会话活跃标记、登录/注册限流、IM token 兑换与账号开通（`/im/token`、`/im/status`、`/im/retry`，含 Redis token 缓存与 IP 限流）、用户资料最小闭环（`/profile` CRUD + 单向同步 goim）、日志/request_id/recovery/metrics、配置加载、数据库迁移、构建与 CI **已实现**；设备、客户端配置、文件、通知/推送、管理端、OAuth **仍为规划中**。本文保留完整蓝图，并逐章标注状态。
+**当前落地状态（2026-11-27）**：**A 档已基本完成**。账号与鉴权、IM token 兑换与账号开通、资料同步、设备、客户端配置、文件（头像 / 聊天图片 / 聊天文件 / 业务附件，含分片、软删与对象回收）均已注册路由并有单测与迁移；聊天资源已改为会话成员可见（`conversation_id` + 成员鉴权）。剩余 A 档收尾项：资料扩展字段（`PUT /profile/me/extended`）、端到端联调与发布门禁。**B 档（通知/推送、管理端、关系链风控）仍只保留契约、不注册路由**，C 档继续委托 goim。本文保留完整蓝图，并逐章标注状态；后续排期见 §15。
 
 ### 1.2 实现状态总览
 
@@ -36,7 +36,7 @@
 | 用户资料 | ✅ 最小闭环 | `/profile` 路由 + `profile_sync` outbox；头像走 `/files` 上传后写 `avatar_key`；展示用公开 `avatarUrl` |
 | 设备 | ✅ 已实现 | `account_devices` 表随注册/登录自动登记；`/devices` 列表与移除（移除同时撤销该设备会话） |
 | 客户端配置 | ✅ 已实现 | `client_configs` 表 + `/client-config`、`/client-config/schema`；版本化 ETag 与 304 |
-| 文件 | ✅ 头像上传已实现 | `file_objects` + RustFS/S3 预签名（`/files`）；过期 pending 由 cron 清理 |
+| 文件 | ✅ 已实现 | `file_objects`（含 `conversation_id`）+ RustFS/S3 单文件与分片预签名；头像公开、聊天资源仅会话成员、附件仅本人；pending 过期与删除态对象由 cron 回收 |
 | 通知 / 推送 | ⏳ 规划中 | 无 `notifications` 表、无投递逻辑 |
 | 管理端 / OAuth | ⏳ 规划中 | 无管理端路由与角色体系 |
 | 多租户 | ❌ 不做 | 首版单租户，依赖 goim 多租户改造后再评估 |
@@ -70,19 +70,19 @@
 
 其余后置项：独立 Kafka/异步队列、APNs/FCM 业务推送、管理后台前端、全链路 OTel Collector、CDN、灰度平台、数据仓库与埋点。
 
-### 1.5 立项时识别的既有问题（⏳ 待核实，当前仓库不包含客户端代码）
+### 1.5 立项时识别的既有问题（✅ 已整改，Web 客户端已切换业务登录）
 
 1. **`goim-web-chat/.env.local` 明文内置 `VITE_GOIM_ADMIN_SECRET`**，且 `useGoim.ts` 用 `client.login(userID)` 走 admin bootstrap。任何访问者都可为任意 userID 签发 IM token。上线前必须轮换该 secret，并改为业务后端下发 user token。
 2. **Web 端平台 ID 错用 1（iOS）**，应为 5（Web）。否则多端会话、token key、推送 token 全部串平台。
 3. **goim 是 MongoDB，业务是 MySQL**：用户资料必须单向同步（业务 → goim），禁止双写。
 
-> 上述问题来自立项取证材料，该材料未随仓库归档；本仓库只提供业务后端，相关修复需在客户端仓库完成并在联调阶段复核。
+> 上述问题来自立项取证材料；Web 客户端已完成整改：移除 `VITE_GOIM_ADMIN_SECRET`、改为业务账号登录 + `POST /im/token` + `LoginWithToken`、平台 ID 改为 5。其余仓库（桌面/移动）接入时复用同一约定。
 
 ---
 
 ## 2. 现状与边界
 
-### 2.1 客户端真实链路（目标蓝图，⏳ IM 部分未实现）
+### 2.1 客户端真实链路（✅ 代码链路已贯通）
 
 ```
 Web / 桌面
@@ -100,7 +100,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
   └─ 文件上传：biz /files/presign 或 /files/multipart/presign → 直传 RustFS
 ```
 
-**当前已可用的前半段**：客户端调用 `POST /biz-api/v1/account/register|login|refresh` 获得业务 access token，再调用 `POST /biz-api/v1/im/token` 兑换 IM token（✅）；Web 客户端已改为业务账号登录 + `LoginWithToken`，并在 IM token 到期前自动续期（✅ 代码层闭环，端到端联调待环境）。
+**当前状态**：客户端 `POST /biz-api/v1/account/register|login|refresh` 获得业务 access token → `POST /biz-api/v1/im/token` 兑换 IM token → `LoginWithToken`；资料、设备、客户端配置、文件上传均已有业务接口（✅）。剩余为环境上的端到端联调与发布门禁（⏳）。
 
 ### 2.2 职责边界（明确做/不做）
 
@@ -110,8 +110,8 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 | IM token 签发 | ✅ 兑换并缓存 | ✅ 实际签发 | 业务不持有 goim JWT 签名密钥，避免越权 | ✅ 已实现 |
 | 用户资料 | ✅ 写 MySQL | ✅ 读投影 | 单向同步（MySQL → goim `update_user_info`，outbox 补偿） | ✅ 最小闭环 |
 | 好友/群/会话/消息 | ❌ 不落库 | ✅ | 业务只在管理端做只读检索/聚合 | ❌ 不做（B/C 档） |
-| 文件字节 | ❌ 不代理 | ✅ RustFS 直传 | 业务只做签名与元数据 | ⏳ 规划中 |
-| 设备与多端会话 | ✅ | ✅ IM 连接维度 | 业务管账号会话，goim 管连接 | 业务会话 ✅ / 设备表 ⏳ |
+| 文件字节 | ❌ 不代理 | ✅ RustFS 直传 | 业务只做签名与元数据 | ✅ 已实现 |
+| 设备与多端会话 | ✅ | ✅ IM 连接维度 | 业务管账号会话，goim 管连接 | ✅ 业务会话 + 设备表 |
 | 业务通知/公告 | 首版只给契约 | ✅ `/msg/send_business_notification` 投递 | 不在业务侧重造投递通道 | ⏳ 规划中 |
 | 管理后台 | 首版只给契约 | 部分只读复用 | 转正后业务后台不直接写 Mongo | ⏳ 规划中 |
 | 离线推送 | 首版不接厂商 | ✅ im-push | 后置按业务通知需要再评估 | ⏳ 规划中 |
@@ -120,9 +120,9 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 
 1. **IM 账号开通器（User Provisioning）**（✅）：注册后同步 goim user，失败可重试，状态可查询。**业务 userID 即 IM userID**，开通时原样写入，不生成第二套 ID。当前已写入 `account_users.im_status/im_synced_at`；注册事务内同时写通用 `outbox_events`，独立 `cmd/cron` 进程按退避策略补偿（✅）；注销同步（`purge_im_user`，placeholder 模式）✅。
 2. **IM Token Broker**（✅）：admin token 缓存、按 `(userID, platformID)` 复用 user token、IP 限频。
-3. **设备注册表**（⏳）：deviceID、平台、版本、推送 token、最后活跃时间；支撑多端踢出与推送。当前会话表已记录 `device_id`，但没有独立设备表。
+3. **设备注册表**（✅）：`account_devices` 记录 deviceID、平台、版本、推送 token（预留）、最后活跃时间；注册与登录自动登记，支撑多端踢出与后续推送。
 4. **业务文件资产**（✅）：头像、聊天图片、聊天文件与业务附件已实现；聊天资源统一走 biz 并绑定 `conversationId`，仅会话成员可换 URL，不再回退 goim `/third/*`；后续扩展反馈截图、后台素材、配额与审计。
-5. **配置中心**（⏳）：客户端配置、功能开关、IM 地址与平台映射，版本化下发。
+5. **配置中心**（✅）：`client_configs` 提供客户端配置、功能开关、IM 地址与平台映射，版本化 ETag 下发；管理端写接口尚未开放，暂由运营 SQL 递增版本。
 6. **审计日志**（⏳）：管理端写操作留痕（谁、何时、对谁、做了什么、request_id）；B 档转正时启用。
 7. **账号生命周期**（✅ 注销 / ⏳ 冻结解冻与导出）：`DELETE /account` 注销后立即下线并同步 IM，冷却期（默认 15 天）结束后由 `account_purge` 任务物理清除资料、凭证、会话与设备，并把文件置为删除交由清理任务回收；冻结登录检查已实现，解冻与数据导出仍 ⏳。
 
@@ -130,16 +130,16 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 
 > 业务域按完整范围设计；实现按“是否阻塞登录聊天闭环”分三档：
 > **A 档（原首版实现）** / **B 档（契约先行，仅文档，不注册路由）** / **C 档（委托 goim，业务侧不建实现）**。
-> 本表新增“当前状态”列：A 档不等于已实现，以代码为准。
+> 本表新增“当前状态”列：A 档已基本完成，但实现细节仍以代码为准。
 
 | 业务域 | 分档 | 当前状态 | 首版行为 | 扩展点 |
 |---|---|---|---|---|
 | 账号 / 会话 / 令牌 | A | ✅ 已实现 | 注册、登录、刷新、登出、会话列表、踢会话、改密、注销（冷却期 + 异步清除） | OAuth、短信、2FA、解冻与数据导出 |
 | IM 凭证 | A | ✅ 已实现 | admin token 缓存 + user token 兑换（Redis 缓存/限流）+ 状态查询与手动重试 | 多租户 issuer、按 App 的 secret |
 | 用户资料 | A（最小） | ✅ 已实现 | 昵称/头像 key/bio；批量公开资料（`/profile` 路由已注册） | 扩展字段、敏感词、资料审核 |
-| 设备 | A（最小） | ⏳ 规划中 | 注册、列表、移除（尚未注册路由） | 推送 token、设备风控 |
-| 客户端配置 | A | ⏳ 规划中 | 版本化配置 + ETag + schema（尚未注册路由） | 灰度、按用户/租户覆盖、A/B |
-| 文件 | A（仅头像） | ⏳ 规划中 | presign、complete、访问 URL（尚未注册路由） | 通用附件、配额、审核、CDN |
+| 设备 | A（最小） | ✅ 已实现 | 注册/登录自动登记、列表、移除并踢出设备会话 | 推送 token、设备风控 |
+| 客户端配置 | A | ✅ 已实现 | 版本化配置 + ETag + 304 + schema | 灰度、按用户/租户覆盖、A/B |
+| 文件 | A | ✅ 已实现 | 单文件/分片预签名、complete 校验、会话成员鉴权、对象回收 | 配额、审核、CDN、反馈截图 |
 | 会话 | C + B | ❌ 不做（委托 goim） | 契约给 BFF/扩展；实现委托 goim | 置顶分组、标签、业务备注 |
 | 消息历史/搜索 | C + B | ❌ 不做（委托 goim） | 契约给管理端检索；客户端走 SDK | 归档、全文检索、合规导出 |
 | 好友/群组 | C | ❌ 不做 | 不建实现，契约标注委托 | 企业通讯录映射 |
@@ -149,7 +149,7 @@ goim-business  ── admin token ──▶ im-api /auth/get_user_token
 
 分档的落地约束：
 
-- **A 档**目标要求完整实现、单测与迁移；当前仅账号域达到该标准。
+- **A 档**要求完整实现、单测与迁移；除“资料扩展字段”外，A 档各域均已达到该标准，剩余为端到端联调与发布门禁。
 - **B 档**只在文档/契约中定义 path/method/schema；**首版不注册路由、不做 9003 占位**，避免无意义的路由与测试开销。
 - **C 档**在文档中标注委托 goim，业务后端**不注册同名路由**，避免与 SDK 路径冲突。
 - 新增/转正一个 B 档域时，再补 handler 与契约状态标记，不改契约路径。
@@ -201,7 +201,7 @@ gin.New()
   → Service → Repository(gorm/MySQL) / Redis
 ```
 
-原则：中间件只做横切；业务判断全部在 service/domain；repository 不返回 HTTP 语义；外部系统适配在后续 `client` 层（⏳ 尚未创建）。
+原则：中间件只做横切；业务判断全部在 service/domain；repository 不返回 HTTP 语义；外部系统适配统一放 `client`（goim HTTP 客户端）与 `adapter`（把外部客户端适配为业务端口）。
 
 ### 3.3 当前运行时拓扑（✅ 已实现）
 
@@ -317,7 +317,7 @@ cors:
 3. `domain` 定义实体、值对象、领域策略与仓储端口；`service/ports` 定义缓存/事务等应用端口；实现在 `repository`。
 4. `repository` 只做持久化；错误统一映射为领域错误（`ErrNotFound`/`ErrDuplicate`）。
 5. 跨层使用 `internal/types` 的请求/响应契约与 `internal/domain` 的领域对象；禁止把 gorm model 直接序列化给前端。
-6. 外部系统适配统一放在 `client`（goim 已实现，RustFS 尚未创建 ⏳）。
+6. 外部系统适配统一放在 `client`（goim）与 `pkg/storage/s3`（RustFS）；业务服务通过 `ports` 接口依赖适配器，不直接引用具体实现。
 
 ### 4.4 数据库迁移与 gorm 实践（✅ 已实现）
 
@@ -479,14 +479,14 @@ refresh 规则（✅ 已实现）：
 | 账号 | 2001 / 2002 / 2003 / 2004 / 2005 / 2006 | 账号已存在 / 凭证错误 / 账号冻结 / access 过期 / refresh 重放 / 会话超限 |
 | 内部 | 9001 / 9002 | 内部错误 / 依赖不可用 |
 
-说明：`1003`、`1005`、`2006` 已定义但当前链路未使用（会话超限通过踢出实现，不报错）。`3001+`（资料/设备）、`4001+`（文件）、`5001+`（配置/通知）、`6001+`（管理端）、`9003`（B 档占位）均为**规划中**，未写入代码。
+说明：`1003`、`1005`、`2006` 已定义但当前链路未使用（会话超限通过踢出实现，不报错）。资料、设备、文件、配置域**复用通用错误码**（`1001` 参数、`1003` 越权、`1004` 不存在、`1005` 冲突、`1029` 限流、`9002` 依赖不可用），不另设 `3001+/4001+` 号段；`6001+`（管理端）与 `9003`（B 档占位）未启用。
 
 ### 4.7 请求链路追踪与日志规范（✅ 已实现基础；trace/OTel ⏳）
 
 **结论：首版用 `request_id + operationID` 打通业务与 goim；OTel 全链路后置。**
 
 - `RequestID` 中间件读取 `X-Request-ID`，兼容 SDK 的 `operationID`；为空或长度 >128 时用 UUIDv7 生成，并回写响应头 `X-Request-ID`。
-- 调 goim 时同时带 `X-Request-ID` 与 `operationID`（goim 日志按 operationID 串联）——⏳ 尚未创建 goim client。
+- 调 goim 时同时带 `X-Request-ID` 与 `operationID`（goim 日志按 operationID 串联）——✅ 已实现（`internal/client/goim`）。
 - 跨服务透传 W3C `traceparent`（若未来接 OTel collector）——⏳ 未实现。
 - 日志：zap JSON（`format=json`），固定字段 `service`、`env`、`version`；访问日志字段为 `request_id`、`user_id`、`method`、`route`、`status`、`error_code`、`latency_ms`、`client_ip`。正常请求以 Debug 级别记录；`status >= 500` 或 `error_code >= 9000` 以 Error 级别记录。
 - 每个请求只打一条访问日志（`AccessLog` 中间件）；service 只记录决策点/外部依赖失败，不重复打印访问日志。
@@ -542,7 +542,7 @@ refresh 规则（✅ 已实现）：
 |---|---|---|
 | 配置/工具/缓存 | 表驱动单测，`miniredis` 模拟 Redis | ✅ 已有测试 |
 | domain/service | 手写 fake repository/cache 的单测 | ✅ 已有 `service_test.go` |
-| handler | `httptest` + gin engine | ⏳ 尚无 |
+| handler | `httptest` + gin engine | ✅ 账号/资料/设备/配置/文件 |
 | repository 集成 | `testcontainers-go` + 真实 MySQL + migrations | ⏳ 未引入依赖 |
 | 端到端 | compose + 真实 im-api 冒烟 | ⏳ 未实现 |
 
@@ -661,7 +661,7 @@ CREATE TABLE outbox_events (
 
 升级路径：当出现跨团队消费、峰值 >1000 TPS 或需要多订阅方时，再把 outbox 投递到 Kafka；业务代码只需替换 dispatcher。
 
-### 4.15 对象存储选型（⏳ 规划中，未实现）
+### 4.15 对象存储选型（✅ 已实现）
 
 **结论：复用现有 RustFS（S3 兼容），业务资产独立 bucket；AWS SDK v2 直接预签名，不经过 goim。**
 
@@ -825,8 +825,10 @@ goim-business/
 │   ├── middlewares/                # 现有目录；未来增加 adminauth.go、idempotency.go
 │   ├── service/{account,clientconfig,file,notification,admin}/   # account 含 im_outbox.go、profile.go、device.go（✅）；clientconfig ✅；file ✅
 │   ├── repository/{account,clientconfig,file,notification,audit}/   # account 含 device.go、outbox 在独立包（✅）；clientconfig/file ✅
-│   ├── client/{goim,storage}/      # ✅ goim HTTP；S3 适配层在 pkg/storage/s3 ✅
-│   ├── job/{im,file_cleanup,scheduler}/  # im ✅；其余 ⏳
+│   ├── client/{goim}/              # ✅ goim HTTP 客户端
+│   ├── adapter/{im}/               # ✅ 把 goim 适配为账号/文件端口（含群成员缓存）
+│   ├── pkg/storage/s3/             # ✅ RustFS/S3 预签名与对象操作
+│   ├── job/{im,file_cleanup,scheduler}/  # ✅ im、file_cleanup；scheduler ⏳
 │   ├── model/、types/、pkg/
 ├── deploy/{compose.dev.yaml,k8s/}   # ⏳ k8s
 ├── test/{integration,e2e}/          # ⏳
@@ -837,7 +839,7 @@ goim-business/
 约定：
 
 - 每个业务域在 handler/service/domain/repository 下同名子包，禁止跨域直接 import service。
-- `client/goim` 是唯一允许出现 `operationID`/`token` 头的地方（未来）。
+- `internal/client/goim` 是唯一允许出现 `operationID`/`token` 头的地方。
 - `pkg/` 只放无业务语义的基础设施；出现业务名词即下沉到 service/domain。
 
 ---
@@ -862,7 +864,7 @@ goim-business/
 | `github.com/alicebob/miniredis/v2` | v2.40.0 | Redis 单测 | ✅ |
 | `github.com/oapi-codegen/oapi-codegen/v2` | — | OpenAPI 代码生成 | ⏳ 未引入 |
 | `github.com/getkin/kin-openapi` | — | 契约校验 | ⏳ 未引入 |
-| `github.com/aws/aws-sdk-go-v2/service/s3` | — | RustFS 预签名 | ⏳ 未引入 |
+| `github.com/aws/aws-sdk-go-v2/service/s3` | — | RustFS 预签名 | ✅ 已引入 |
 | `github.com/testcontainers/testcontainers-go` | — | 集成测试 | ⏳ 未引入 |
 | `go.uber.org/mock` | — | mock 生成 | ⏳ 未引入 |
 | `github.com/golangci/golangci-lint` | — | 静态检查 | ⏳ 未接入 CI |
@@ -871,7 +873,7 @@ goim-business/
 
 ---
 
-## 7. 数据模型（M1 已建三张账号表，其余为设计预留 ⏳）
+## 7. 数据模型（A 档已建 6 张表；B 档表仍为设计预留）
 
 > 所有表：`id BIGINT UNSIGNED AUTO_INCREMENT` 主键；对前端与 IM 下发时由应用层转为字符串。
 > 时间列：`DATETIME(3)`，应用层统一写入 UTC。
@@ -942,26 +944,43 @@ CREATE TABLE account_sessions (
 - 活跃判定：`revoked_at IS NULL AND rotated_at IS NULL AND expires_at > now`；Redis 活跃标记 TTL 与 `expires_at` 对齐。
 - 索引：`uk_refresh_hash` 支撑精确定位；`idx_user_platform` 支撑每平台会话上限；`idx_family` 支撑整族撤销。
 
-### 7.4 `devices`（⏳ 规划中，未建表）
+### 7.4 `account_devices`（✅ 已建表，migration `000003`）
 
 ```sql
-CREATE TABLE devices (
+CREATE TABLE account_devices (
   id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   user_id        BIGINT UNSIGNED NOT NULL,
   device_id      VARCHAR(64)  NOT NULL,
-  platform       TINYINT      NOT NULL,
-  model          VARCHAR(64)  NOT NULL DEFAULT '',
-  os_version     VARCHAR(32)  NOT NULL DEFAULT '',
+  platform       TINYINT      NOT NULL,          -- 1 iOS 2 Android 3 Windows 4 Mac 5 Web 11 HarmonyOS
   app_version    VARCHAR(32)  NOT NULL DEFAULT '',
-  push_token     VARCHAR(255) NOT NULL DEFAULT '',
-  push_provider  VARCHAR(16)  NOT NULL DEFAULT '',
-  last_active_at DATETIME(3)  NULL,
-  status         TINYINT      NOT NULL DEFAULT 1,
-  UNIQUE KEY uk_user_device (user_id, device_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+  push_token     VARCHAR(255) NOT NULL DEFAULT '', -- 推送 token，空表示未开启（当前仅预留）
+  last_active_at DATETIME(3)  NOT NULL,
+  created_at     DATETIME(3)  NOT NULL,
+  updated_at     DATETIME(3)  NOT NULL,
+  UNIQUE KEY uk_user_device (user_id, device_id),
+  KEY idx_user_active (user_id, last_active_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
-### 7.5 `file_objects`（✅ 已建表，migration `000005` + `000006`）
+注册与登录成功会在同一事务内 upsert 当前设备；`DELETE /devices/{deviceId}` 同时撤销该设备全部会话，提交后清理 Redis 活跃标记，并调用 goim `force_logout{platformID, deviceIDs}` 断开该设备 WS、按平台失效 IM token，同时清除业务侧 `im:token` 缓存。goim 的取消失效粒度是设备（同一设备的多条会话共享 deviceID，无法只踢其中一条），因此撤销任一会话都要踢该设备：被撤销的会话即使 access token 未过期，也因鉴权中间件的活跃校验而无法重连；同设备仍有效的会话会重新握手并换取新 token 自动恢复。IM 踢出失败只记日志，不回滚设备移除。首版不采集机型/OS 版本，也没有独立设备状态位（以会话与最近活跃时间判断）。
+
+### 7.5 `client_configs`（✅ 已建表，migration `000004`）
+
+```sql
+CREATE TABLE client_configs (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  platform   TINYINT      NOT NULL DEFAULT 0,   -- 0 全平台默认，具体平台行覆盖
+  version    INT          NOT NULL DEFAULT 1,   -- 递增后 ETag 失效
+  content    JSON         NOT NULL,             -- features/limits/minAppVersion
+  created_at DATETIME(3)  NOT NULL,
+  updated_at DATETIME(3)  NOT NULL,
+  UNIQUE KEY uk_platform (platform)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+`platform=0` 为默认行，具体平台行覆盖默认值；读取时回退顺序为“平台行 → 默认行 → 代码内置默认值”。
+
+### 7.6 `file_objects`（✅ 已建表，migration `000005` + `000006`）
 
 ```sql
 CREATE TABLE file_objects (
@@ -983,7 +1002,7 @@ CREATE TABLE file_objects (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 ```
 
-### 7.6 `app_configs`（⏳ 规划中，未建表）
+### 7.7 `app_configs`（⏳ 规划中，未建表）
 
 ```sql
 CREATE TABLE app_configs (
@@ -998,7 +1017,7 @@ CREATE TABLE app_configs (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 ```
 
-### 7.7 `notifications`（⏳ 规划中，未建表）
+### 7.8 `notifications`（⏳ 规划中，未建表）
 
 ```sql
 CREATE TABLE notifications (
@@ -1014,7 +1033,7 @@ CREATE TABLE notifications (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 ```
 
-### 7.8 `audit_logs`（⏳ 规划中，未建表）
+### 7.9 `audit_logs`（⏳ 规划中，未建表）
 
 ```sql
 CREATE TABLE audit_logs (
@@ -1109,7 +1128,7 @@ IM 开通补偿使用通用 `outbox_events` 表（见 §4.14，✅）。管理�
 | GET | `/devices` | 🔐 | 我的设备列表（按最近活跃时间倒序，不含推送 token） | ✅ |
 | DELETE | `/devices/{deviceId}` | 🔐 | 移除设备并撤销该设备的全部活跃会话 | ✅ |
 
-设备登记落在 `account_devices`，以 `(user_id, device_id)` 为唯一键；注册与登录成功都会在同一事务内自动 upsert 当前设备（`X-Device-Id` 必填，`X-Client-Version` 可选），因此不提供独立注册接口。重复登录覆盖平台/版本，保留首次注册时间。移除设备与撤销会话在同一事务内完成，提交后清理 Redis 活跃标记。
+设备登记落在 `account_devices`，以 `(user_id, device_id)` 为唯一键；注册与登录成功都会在同一事务内自动 upsert 当前设备（`X-Device-Id` 必填，`X-Client-Version` 可选），因此不提供独立注册接口。重复登录覆盖平台/版本，保留首次注册时间。移除设备与撤销会话在同一事务内完成，提交后清理 Redis 活跃标记，并按会话所属 `(platform, deviceID)` 调用 goim 踢下线、清除 IM token 缓存；踢出失败不阻塞业务撤销。
 
 ### 8.5 客户端配置 `/client-config`（✅ 已实现）
 
@@ -1369,7 +1388,7 @@ POST /admin/announcements
 
 - 目录、`go.mod`、分层骨架、配置加载与校验、zap、统一响应/错误码、request_id、recovery、CORS、metrics、health、graceful shutdown、Makefile、Dockerfile、compose、最小 CI。✅
 - 迁移框架与 `000001_account_init`（只建 `account_users`、`account_credentials`、`account_sessions`）。✅
-- OpenAPI 只写 M1 实际存在的 operation；B/C 档只在设计文档中保留，不生成路由。⏳ 当前未引入 OpenAPI 工具链。
+- OpenAPI 只写实际存在的 operation；B/C 档只在设计文档中保留，不生成路由。✅ 已由 `api/openapi_test.go` 守护；暂未引入 codegen 工具链。
 - 验收：`make run` 起服务；`/readyz` 200；`/metrics` 可抓；`go test ./...` 绿；空库迁移成功；镜像可构建。✅（`make dev` 不存在，使用 `make run` 或 `make build`）
 
 ### M1 账号与鉴权闭环（✅ 已完成，首版核心）
@@ -1390,25 +1409,25 @@ POST /admin/announcements
 ### M3 资料 / 设备 / 客户端配置（✅ 代码闭环；联调验收待环境）
 
 - `/profile`（最小）：✅ `GET/PUT /profile/me`、`POST /profile/batch`、`GET /profile/users/{userId}`；资料以 MySQL 为事实源，更新事务内写 `profile_sync` outbox，提交后即时同步 goim，失败按退避补偿；IM 账号未开通时由 worker 等待开通完成后再同步。头像当前存 `avatar_key`（对象 key），读取时解析为稳定公开 `avatarUrl` 供他人访问，IM 同步使用同一公开 URL。
-- `/devices`：✅ `account_devices` + `GET /devices`、`DELETE /devices/{deviceId}`；设备随注册/登录自动登记，移除设备同时撤销该设备全部会话并清理 Redis 活跃标记。
+- `/devices`：✅ `account_devices` + `GET /devices`、`DELETE /devices/{deviceId}`；设备随注册/登录自动登记，移除设备同时撤销该设备全部会话、清理 Redis 活跃标记，并调用 goim 按 `(platform, deviceID)` 踢下线、清除 IM token 缓存。
 - `/client-config`：✅ `client_configs` + `GET /client-config`（版本化 ETag、304）、`GET /client-config/schema`；配置表缺失回退内置默认值。
 - 验收：配置版本递增、304 生效、设备列表可踢出已由单测覆盖；改昵称/头像后另一客户端可见 ⏳ 待联调环境。
 
-### M4 文件（头像 + 分片附件）+ 首版发布门禁（✅ 清理任务已实现）
+### M4 文件（头像 + 分片附件 + 聊天资源）+ 首版发布门禁（✅ 功能已完成，待联调）
 
-- RustFS 预签名、complete 校验、访问 URL、头像配额、分片上传、孤儿清理。
-- 验收：头像全链路；大文件分片上传/合并/取消；超大/非法类型被拒；未 complete 的对象 24h 清理。
-- 当前进度：头像单文件、附件分片（8MB/片、≤200MB）、complete 二次校验、abort、软删与配额已实现（✅）；孤儿清理任务（cron `file_object_cleanup`，默认 1h 扫描、单批 100 条，先原子置 deleted 再 abort 分片/删除对象）已实现（✅）；环境就绪后需联调头像与分片全链路。
-- **首版门禁**：M0-M4 全部通过、Web 端完成 token 改造、压测与回滚演练通过后即可发布；B 档未实现不影响发布。当前 M2 代码闭环完成（后端 + Web 客户端），仅差联调环境上的端到端验收；M3 资料/设备/客户端配置代码闭环已完成，M4 文件上传（含分片）接口已实现，尚不满足发布门禁。
+- RustFS 预签名、complete 校验、访问 URL、头像配额、分片上传、孤儿清理；聊天图片/聊天文件绑定会话，仅会话成员可兑换短时 URL（✅）。
+- 验收：头像全链路；大文件分片上传/合并/取消；超大/非法类型被拒；未 complete 的对象 24h 清理；聊天资源第三方返回 1004（单测已覆盖）。
+- 当前进度：单文件（头像 5MB、聊天图片 8MB）、分片（8MB/片、≤200MB）、complete 二次校验、abort、软删、会话成员鉴权与对象回收（cron `file_object_cleanup`）均已实现（✅）；环境就绪后需联调头像/分片/聊天资源全链路。
+- **首版门禁**：A 档功能已完成、Web 端 token 与文件链路已改造；剩余压测、回滚演练与联调验收。B 档未实现不影响发布。
 
-### M5 上线加固（⏳ 未开始，与 M4 并行收尾）
+### M5 上线加固（🚧 部分完成，压测/演练待环境）
 
 - 压测（登录/会话/IM token）、Grafana 看板、告警、备份演练、发布/回滚手册、安全扫描。
 - 验收：P99 达标；故障注入（goim/Redis 不可用）降级符合预期；回滚演练通过。
 
-### M6 后续补齐（⏳ 按需，不动契约路径，不预设优先级）
+### M6 后续补齐（⏳ 按需，不动契约路径；建议顺序见 §15）
 
-B 档域按实际业务需要选择转正，每次只转正一个域；**当前不排优先级**：
+B 档域按实际业务需要选择转正，每次只转正一个域；**建议顺序见 §15**：
 
 - 通知/公告/站内信 → 厂商推送（JPush/FCM）。
 - 管理端登录 → 用户/会话/文件/配置/审计/统计。
@@ -1419,7 +1438,7 @@ B 档域按实际业务需要选择转正，每次只转正一个域；**当前�
 
 转正方式：补 service/repository 与 handler 实现，再补对应 OpenAPI operation；路径与 DTO 不变。
 
-依赖关系：M0 → M1 → M2 为硬串行；M3/M4 可并行；M5 与 M4 收尾并行；M6 在首版发布后按实际需求安排，不预设优先级。
+依赖关系：M0 → M1 → M2 为硬串行；M3/M4 可并行；M5 与 M4 收尾并行；M6 在首版发布后按 §15 的建议顺序推进。
 
 ### M6.1 注销同步 IM 与删除态对象回收（✅ 已实现，IM 采用 placeholder 模式）
 
@@ -1577,9 +1596,12 @@ account:
 - [x] ✅ 日志字段规范落地，request_id 贯通；`X-Request-ID` 回写。
 - [x] ✅ 登录/注册限流可配置，限流实现已落地（防刷用例已补：`internal/middlewares/ratelimit_test.go`）。
 - [x] ✅ M2：`/im/token` 有 Redis token 缓存（按 userID+platform、TTL 扣 10 分钟）、IP 限频、依赖失败降级；`/im/status`、`/im/retry` 已注册。
-- [ ] ⏳ M2+：Web 聊天室移除 adminSecret，平台 ID 改为 5，登录走业务 token。
 - [x] ✅ M2：IM 开通 outbox 由独立 `cmd/cron` 进程（`robfig/cron/v3` 调度）周期扫描，失败按 2^attempts 分钟退避（上限 1 小时）；Redis 锁保证多实例互斥。
-- [ ] ⏳ M2+：outbox 积压指标与告警。
+- [x] ✅ M2+：Web 聊天室已移除 adminSecret，平台 ID 改为 5，登录走业务 token。
+- [x] ✅ M3：设备、客户端配置、资料最小闭环路由与单测已落地。
+- [x] ✅ M4：文件单文件/分片、complete 校验、聊天资源会话鉴权、软删与对象回收已落地。
+- [ ] ⏳ A 档收尾：`PUT /profile/me/extended`、端到端联调、压测与回滚演练。
+- [ ] ⏳ outbox 积压指标与告警。
 - [x] ✅ 镜像可构建；迁移入口已提供（`bin/migrate up|down|version`）。
 - [ ] ⏳ 迁移 Job 与发布顺序写入 runbook。
 - [ ] ⏳ 后续域（通知/管理端/会话扩展/归档/推送偏好/举报）只保留契约，不注册路由。
@@ -1595,8 +1617,57 @@ account:
 2. **账号域纵切（✅ 已完成）**：`account_users` / `account_credentials` / `account_sessions` 迁移 → 仓储 → 注册 → 登录 → 签发 access/refresh → 刷新轮换 → 登出/踢出 → 改密。
 3. **安全与多端（✅ 已完成）**：argon2id、refresh 哈希与重放检测、Redis 活跃会话、每用户/每平台会话上限、登录/注册限流、登录失败锁定。
 4. **验收（✅ 已完成）**：`go test ./...` 全绿；空库迁移成功；curl 跑通注册→登录→刷新→登出；多端会话互不影响；日志无敏感字段。
-5. **M2 IM 对接（🚧 进行中）**：goim 客户端、注册同步开通与手动重试、IM 开通 outbox 与后台补偿、`/im/token`（Redis 缓存 + IP 限流）、`/im/status`、`/im/retry` 已完成；Web 客户端 `adminSecret` 改造仍 ⏳。
+5. **M2 IM 对接（✅ 已完成）**：goim 客户端、注册同步开通与手动重试、IM 开通 outbox 与后台补偿、`/im/token`（Redis 缓存 + IP 限流）、`/im/status`、`/im/retry` 已完成；Web 客户端已改为业务账号登录 + `LoginWithToken`。
+6. **M3 资料 / 设备 / 客户端配置（✅ 已完成）**：资料最小闭环与 `profile_sync` outbox、`account_devices` 与 `/devices`、`client_configs` 与 ETag/304。
+7. **M4 文件（✅ 功能完成）**：单文件与分片预签名、complete 二次校验、聊天资源会话绑定与成员鉴权、软删、pending 过期与删除态对象回收。
 
-未包含（⏳ 后续 M2+）：文件域、B/C 档路由、管理端、OpenAPI 全量契约（当前仅账号、IM、资料、设备与配置域最小契约）、RustFS/推送。
+未包含（⏳ 后续）：B 档路由（通知/推送、管理端、关系链风控）、资料扩展字段、端到端联调/压测/回滚演练。A 档其余能力均已注册路由并有迁移与单测。
 
 代码不自动提交，提交时机与粒度由用户决定。
+
+---
+
+## 15. 后续开发计划（2026-11-27 基线）
+
+> 排序原则：先把 A 档“可发布、可运维”闭环，再按用户可见价值逐个转正 B 档；每次只转正一个域，保持“契约不变、补实现”的方式。
+
+### 15.1 P0：A 档收尾与发布门禁
+
+| # | 事项 | 范围 | 验收标准 |
+|---|---|---|---|
+| P0-1 | 资料扩展字段 | `PUT /profile/me/extended`（地区/性别/签名/自定义 JSON），补迁移与契约 | 字段可读写；越权与长度校验；OpenAPI/Apifox 同步 |
+| P0-2 | 端到端联调 | 业务登录 → `/im/token` → `LoginWithToken` → 收发消息 / 拉历史 / 资料与头像 / 设备踢出 | Web 与桌面各跑通一遍；9002 降级可恢复 |
+| P0-3 | 发布门禁 | 压测（登录、IM token、文件签名）、故障注入（MySQL/Redis/goim/RustFS）、回滚演练 | P99 达标；降级符合预期；runbook 可执行 |
+| P0-4 | 运维可观测 | outbox 积压/失败指标与告警、文件回收任务指标、迁移 Job 与发布顺序 | 看板与告警上线；迁移步骤写入 runbook |
+| P0-5 | 历史兼容 | 存量 `file_objects.purpose=chat_*` 且 `conversation_id=''` 的访问策略说明与清理脚本 | 文档明确；脚本可重复执行 |
+
+### 15.2 P1：B 档第一批转正（建议顺序）
+
+1. **通知 / 公告 / 站内信**（建议首个）
+   - 依赖：已有 `account_devices.push_token` 预留、outbox 补偿机制、goim 投递能力。
+   - 范围：站内信列表/已读、公告、系统通知模板；厂商推送（JPush/FCM）先做接口与开关，不阻塞站内信。
+   - 验收：通知可落库、可分页、可标记已读；推送失败可重试且不重复；免打扰/折叠策略可配置。
+2. **管理端登录 + RBAC + 审计**
+   - 依赖：独立 audience 的管理员 JWT、角色表、审计表。
+   - 范围：管理员登录/登出、用户查询与冻结、会话踢出、文件查询与删除、配置写入、审计查询。
+   - 验收：管理端写操作 100% 落审计（谁/何时/对谁/动作/request_id）；越权用例覆盖；审计保留 180 天。
+3. **配置管理写接口**
+   - 在管理端 RBAC 之后开放 `client-config` 写入与版本发布，替代运营 SQL。
+
+### 15.3 P2：按业务需要评估
+
+| 域 | 触发条件 | 备注 |
+|---|---|---|
+| 会话扩展属性（`conversation-ext`） | 产品需要置顶分组/标签/备注 | 仍以 goim 会话为权威，业务只存扩展属性 |
+| 消息归档 / 检索 | 管理端检索或合规导出 | 优先复用 goim `/msg/search_msg`，确有全文需求再建索引 |
+| 关系链风控 / 举报 / 拉黑联动 | 出现内容治理诉求 | 与 goim 群/好友关系联动，避免双写 |
+| OAuth / 短信登录 / 2FA | 增长或安全合规要求 | 预留 `account_identities`，不引入第二套 userID |
+| 多租户 | goim 多租户改造落地后 | 当前单租户；配置表已留 `app_id`，用户表不引入 tenant |
+
+### 15.4 不建议现在做的事
+
+- 为 B 档注册占位路由（`9003`）或提前引入 Kafka/独立推送服务；
+- 在业务侧复制好友/群/消息数据（C 档边界不破）；
+- 用业务库承担 IM 消息存储或全文检索；
+- 在没有联调环境前继续横向铺新域——先把 P0 的联调与门禁跑通。
+

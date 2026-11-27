@@ -38,6 +38,7 @@ const (
 	methodUpdateUserInfo     = "update_user_info"
 	methodUserToken          = "user_token"
 	methodGroupMemberUserIDs = "group_member_user_ids"
+	methodForceLogout        = "force_logout"
 )
 
 // ErrDisabled 表示未配置 IM（base_url 为空）。

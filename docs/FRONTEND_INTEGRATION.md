@@ -83,7 +83,7 @@ await fetch(`${API_BASE}/account/register`, {
 ## 5. 设备列表与移除
 
 - `GET /devices`：返回 `deviceId / platform / appVersion / lastActiveAt`，按最近活跃时间倒序，不含推送 token。
-- `DELETE /devices/{deviceId}`：删除该设备记录并撤销该设备的全部活跃会话。
+- `DELETE /devices/{deviceId}`：删除该设备记录并撤销该设备的全部活跃会话；服务端同时调用 goim 踢出该设备的 WS 连接（收到 `2002`）并按平台失效 IM token。
 
 ```js
 await fetch(`${API_BASE}/devices/${encodeURIComponent(deviceId)}`, {
@@ -92,7 +92,7 @@ await fetch(`${API_BASE}/devices/${encodeURIComponent(deviceId)}`, {
 });
 ```
 
-移除当前设备后，本设备的 access token 立即失效（后续请求返回 `1002`），refresh token 也无法再次续期（返回 `1002`，即会话已失效）。前端应清除本地令牌并引导重新登录。
+移除当前设备后，本设备的 access token 立即失效（后续请求返回 `1002`），refresh token 也无法再次续期（返回 `1002`，即会话已失效）；IM 侧会收到 `2002` 踢下线通知，旧的 IM token 同时失效。前端应清除本地令牌、断开 SDK 并引导重新登录，不能继续复用内存中的 IM token 发消息。
 
 ## 5.1 注销账号
 
